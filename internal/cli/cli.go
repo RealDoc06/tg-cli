@@ -401,9 +401,7 @@ func (a *app) sendCmd() *command {
 	c.example = `  tg send @alice "on my way"
   tg send me --file report.pdf "today's report"
   git log -5 --oneline | tg send "Dev Team"
-  tg send @alice <<'EOF'
-  several lines, "quotes" and $ signs arrive exactly as written
-  EOF`
+  printf '%s\n' 'several lines, "quotes"' 'and $ signs, as written' | tg send @alice`
 	var req core.SendRequest
 	c.flags.IntVar(&req.ReplyTo, "reply-to", 0, "message ID to reply to")
 	c.flags.StringVarP(&req.File, "file", "f", "", "file to attach, the text becomes its caption")

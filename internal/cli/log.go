@@ -52,6 +52,9 @@ func logInvocation(account, command string, args []string, started time.Time, ex
 	}
 
 	path := config.Path("log.jsonl")
+	if os.MkdirAll(config.Dir(), 0o700) != nil {
+		return
+	}
 	if info, statErr := os.Stat(path); statErr == nil && info.Size() > maxLog {
 		rotate(path)
 	}
