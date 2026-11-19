@@ -34,6 +34,7 @@ LIMITS
   with exit code 3, and nothing is sent.
   The limits are your user's decision. Never loosen or work around them, and
   do not edit the configuration: tell your user what you could not do.
+  `tg config` also shows the TUI theme. It is your user's choice, leave it.
 
 ACCOUNTS
   tg accounts                         accounts here, * marks the default

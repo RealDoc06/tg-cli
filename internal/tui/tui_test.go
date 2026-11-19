@@ -18,11 +18,8 @@ import (
 func loaded(t *testing.T, width, height int) *model {
 	t.Helper()
 	be := demo.New()
-	m := &model{
-		ctx: context.Background(), be: be, version: "test",
-		histories: map[int64]*history{}, avatars: map[int64]int{},
-		input: newInput("> "), filter: newInput("/ "),
-	}
+	m := newModel(context.Background(), be, "")
+	m.version = "test"
 	chats, err := be.Chats(m.ctx, core.ChatQuery{})
 	if err != nil {
 		t.Fatal(err)
