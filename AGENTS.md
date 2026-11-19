@@ -7,14 +7,14 @@ A Telegram user client in one Go binary: commands for agents, a TUI for humans. 
 | Path | Role |
 | --- | --- |
 | `cmd/tg` | Entry point, holds the version |
-| `internal/core` | Domain types and the `Backend` interface both front ends use |
+| `internal/core` | Domain types, the `Backend` interface both front ends use, and the write guard |
 | `internal/mtp` | Telegram backend (MTProto via gotd): connection, login, peers cache, conversions |
 | `internal/demo` | In-memory backend with sample chats, used by `TG_DEMO=1`, tests and screenshots |
 | `internal/cli` | Commands, flag parsing, text and JSON output |
 | `internal/tui` | Bubble Tea v2 interface: `tui.go` state and input, `view.go` rendering |
 | `internal/termimg` | Kitty graphics protocol (Unicode placeholders) for profile pictures |
 | `internal/selfupdate` | Background and manual updates from GitHub releases |
-| `internal/config` | File locations and API credentials |
+| `internal/config` | File locations and `config.json`: credentials, accounts, guardrails |
 | `install.sh`, `install.ps1` | One line installers |
 | `scripts/` | Release build, terminal screenshots |
 
@@ -34,6 +34,8 @@ scripts/build-release.sh v0.0.0     # cross compile every platform into dist/
 - Chat IDs follow the Bot API convention everywhere outside `internal/mtp`.
 - `internal/cli/guide.txt` is how agents learn the tool. Any change to a command, flag or output format updates it in the same PR.
 - Errors say what to do next, like "no chat matches, find it with `tg chats -q <text>`".
+- Every write to Telegram goes through `core.Guard`. A new write operation is added to the guard in the same PR.
+- Commands that loosen guardrails call `needPerson`. `config.json` stays the single source of truth: commands read it, change it and write it back, never cache it.
 - Reading never marks messages as read unless asked. Sending by title only matches chats in the chat list.
 - No continuously repainting animations in the TUI (spinners, blinking).
 - Tests are focused on behavior that can break. No smoke tests.

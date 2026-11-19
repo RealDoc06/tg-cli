@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -30,6 +31,8 @@ const maxFloodWait = 30 * time.Second
 
 // Options configure a connection.
 type Options struct {
+	// Account names the account whose session is used.
+	Account string
 	// Version is reported to Telegram and shown in its list of sessions.
 	Version string
 	// Updates enables live updates, required for Backend.Watch.
@@ -46,7 +49,13 @@ type Prompter interface {
 // testDC switches to Telegram's test servers, for development only.
 func testDC() bool { return os.Getenv("TG_TEST_DC") != "" }
 
-func sessionPath() string { return config.Path("session.json") }
+func sessionPath(account string) string {
+	return filepath.Join(config.AccountDir(account), "session.json")
+}
+
+func peersPath(account string) string {
+	return filepath.Join(config.AccountDir(account), "peers.json")
+}
 
 // newClient builds a client and, when updates are requested, the manager
 // that keeps them ordered.
@@ -59,7 +68,7 @@ func newClient(opts Options) (*telegram.Client, *updates.Manager, tg.UpdateDispa
 	if err != nil {
 		return nil, nil, dispatcher, err
 	}
-	if err := os.MkdirAll(config.Dir(), 0o700); err != nil {
+	if err := os.MkdirAll(config.AccountDir(opts.Account), 0o700); err != nil {
 		return nil, nil, dispatcher, err
 	}
 
@@ -78,7 +87,7 @@ func newClient(opts Options) (*telegram.Client, *updates.Manager, tg.UpdateDispa
 	})
 
 	tgOpts := telegram.Options{
-		SessionStorage: &session.FileStorage{Path: sessionPath()},
+		SessionStorage: &session.FileStorage{Path: sessionPath(opts.Account)},
 		Middlewares:    []telegram.Middleware{waitFlood},
 		NoUpdates:      !opts.Updates,
 		Device: telegram.DeviceConfig{
@@ -104,7 +113,7 @@ func newClient(opts Options) (*telegram.Client, *updates.Manager, tg.UpdateDispa
 
 // Run connects with the saved session and calls fn with a ready backend.
 func Run(ctx context.Context, opts Options, fn func(context.Context, core.Backend) error) error {
-	if _, err := os.Stat(sessionPath()); err != nil {
+	if _, err := os.Stat(sessionPath(opts.Account)); err != nil {
 		return core.ErrNotLoggedIn
 	}
 	client, gaps, dispatcher, err := newClient(opts)
@@ -122,7 +131,7 @@ func Run(ctx context.Context, opts Options, fn func(context.Context, core.Backen
 		}
 		b := &backend{
 			client: client, api: client.API(), self: selfUser(status.User),
-			peers: loadPeers(), sender: newSender(client.API()),
+			peers: loadPeers(peersPath(opts.Account)), sender: newSender(client.API()),
 			gaps: gaps, avatarSlots: make(chan struct{}, 4),
 		}
 		b.peers.learn(tg.Entities{Users: map[int64]*tg.User{status.User.ID: status.User}}, b.self.ID)
@@ -209,9 +218,10 @@ func Login(ctx context.Context, opts Options, prompt Prompter) (core.User, error
 	return user, friendly(err)
 }
 
-// Logout ends the session on Telegram's side and deletes it locally.
+// Logout ends the session on Telegram's side and deletes the account's
+// files locally.
 func Logout(ctx context.Context, opts Options) error {
-	if _, err := os.Stat(sessionPath()); err != nil {
+	if _, err := os.Stat(sessionPath(opts.Account)); err != nil {
 		return core.ErrNotLoggedIn
 	}
 	client, _, _, err := newClient(opts)
@@ -225,14 +235,7 @@ func Logout(ctx context.Context, opts Options) error {
 	if err != nil && !auth.IsUnauthorized(err) {
 		return err
 	}
-	return errors.Join(os.Remove(sessionPath()), removeIfExists(config.Path("peers.json")))
-}
-
-func removeIfExists(path string) error {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
+	return os.RemoveAll(config.AccountDir(opts.Account))
 }
 
 func selfUser(u *tg.User) core.User {

@@ -283,6 +283,9 @@ func (m *model) statusLine() string {
 		hints = "type to filter  enter open  esc clear"
 	}
 	right := dim.Render("tg " + m.version)
+	if m.account != "" {
+		right = accent.Render(m.account) + "  " + right
+	}
 	if m.status != "" {
 		right = errSty.Render(m.status)
 	}

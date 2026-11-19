@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
+	"github.com/RealDoc06/tg-cli/internal/config"
 	"github.com/RealDoc06/tg-cli/internal/core"
 	"github.com/RealDoc06/tg-cli/internal/demo"
 	"github.com/RealDoc06/tg-cli/internal/mtp"
@@ -34,6 +35,8 @@ import (
 type app struct {
 	version string
 	json    bool
+	// account is the one asked for with --account, empty for the default.
+	account string
 }
 
 // command is one subcommand. Its flags are parsed anywhere on the line, so
@@ -58,6 +61,7 @@ func (a *app) newCommand(use, short string, minArgs, maxArgs int) *command {
 	c.flags.SortFlags = false
 	c.flags.SetOutput(io.Discard)
 	c.flags.BoolVar(&a.json, "json", false, "print one JSON object per line")
+	c.flags.StringVarP(&a.account, "account", "a", "", "act as this account instead of the default one")
 	c.flags.BoolP("help", "h", false, "show this help")
 	return c
 }
@@ -91,7 +95,7 @@ func rootHelp(commands []*command) string {
 		fmt.Fprintf(&b, "  %-12s %s\n", c.name(), c.short)
 	}
 	fmt.Fprintf(&b, "  %-12s %s\n", "guide", "How an agent should use tg, start here")
-	b.WriteString("\nFlags:\n      --json      print one JSON object per line\n  -h, --help      show help, also per command\n  -v, --version   show the version\n")
+	b.WriteString("\nFlags:\n      --json           print one JSON object per line\n  -a, --account name   act as this account instead of the default one\n  -h, --help           show help, also per command\n  -v, --version        show the version\n")
 	return b.String()
 }
 
@@ -107,7 +111,11 @@ func Main(version string) int {
 	started := time.Now()
 	err := a.dispatch(ctx, os.Args[1:])
 	code := exitCode(ctx, err)
-	logInvocation(os.Args[1:], started, code, err)
+	account := ""
+	if name, _, activeErr := a.active(); activeErr == nil {
+		account = name
+	}
+	logInvocation(account, os.Args[1:], started, code, err)
 	if err != nil && code != 130 {
 		fmt.Fprintln(os.Stderr, "tg:", err)
 	}
@@ -122,6 +130,8 @@ func exitCode(ctx context.Context, err error) int {
 		return 130 // interrupted, nothing to report
 	case errors.As(err, new(errUsage)):
 		return 2
+	case errors.As(err, new(*core.RefusedError)):
+		return 3
 	}
 	return 1
 }
@@ -129,7 +139,8 @@ func exitCode(ctx context.Context, err error) int {
 func (a *app) dispatch(ctx context.Context, args []string) error {
 	commands := []*command{
 		a.loginCmd(), a.logoutCmd(), a.meCmd(), a.chatsCmd(), a.readCmd(), a.sendCmd(),
-		a.searchCmd(), a.markReadCmd(), a.createGroupCmd(), a.downloadCmd(), a.watchCmd(), a.updateCmd(),
+		a.searchCmd(), a.markReadCmd(), a.createGroupCmd(), a.downloadCmd(), a.watchCmd(),
+		a.accountsCmd(), a.configCmd(), a.updateCmd(),
 	}
 
 	// Flags before the command name belong to tg itself.
@@ -137,12 +148,16 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	root.SetInterspersed(false)
 	root.SetOutput(io.Discard)
 	root.BoolVar(&a.json, "json", false, "")
+	root.StringVarP(&a.account, "account", "a", "", "")
 	help := root.BoolP("help", "h", false, "")
 	showVersion := root.BoolP("version", "v", false, "")
 	if err := root.Parse(args); err != nil {
 		return errUsage{err}
 	}
 	args = root.Args()
+	if err := config.Migrate(); err != nil {
+		return err
+	}
 
 	switch {
 	case *showVersion || (len(args) > 0 && args[0] == "version"):
@@ -161,7 +176,12 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		}
 		selfupdate.AutoCheck(a.version)
 		return a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
-			return tui.Run(ctx, be, a.version)
+			// Naming the account only matters when there is a choice.
+			label := ""
+			if name, cfg, err := a.active(); err == nil && len(cfg.Accounts) > 1 {
+				label = name
+			}
+			return tui.Run(ctx, be, a.version, label)
 		})
 	}
 
@@ -213,12 +233,43 @@ var negativeID = regexp.MustCompile(`^-\d+$`)
 // shield prefixes negative numbers while flags are parsed.
 const shield = "\x00"
 
-// backend opens Telegram, or the demo data when TG_DEMO is set.
-func (a *app) backend(ctx context.Context, updates bool, fn func(context.Context, core.Backend) error) error {
-	if os.Getenv("TG_DEMO") != "" {
-		return fn(ctx, demo.New())
+// active returns the account to act as, and the configuration as loaded.
+func (a *app) active() (string, *config.File, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", nil, err
 	}
-	return mtp.Run(ctx, mtp.Options{Version: a.version, Updates: updates}, fn)
+	name := cfg.Active(a.account)
+	if err := config.CheckName(name); err != nil {
+		return "", nil, errUsage{err}
+	}
+	return name, cfg, nil
+}
+
+// backend opens the active account on Telegram, or the demo data when
+// TG_DEMO is set, behind the account's guardrails.
+func (a *app) backend(ctx context.Context, updates bool, fn func(context.Context, core.Backend) error) error {
+	name, cfg, err := a.active()
+	if err != nil {
+		return err
+	}
+	if cfg.Accounts[name] == nil && name != config.DefaultAccount {
+		return fmt.Errorf("no account %q, see `tg accounts`", name)
+	}
+	guard := func(be core.Backend) core.Backend {
+		return core.Guard(be, func() (core.Policy, error) { return loadPolicy(name) })
+	}
+	if os.Getenv("TG_DEMO") != "" {
+		return fn(ctx, guard(demo.New()))
+	}
+	err = mtp.Run(ctx, mtp.Options{Account: name, Version: a.version, Updates: updates}, func(ctx context.Context, be core.Backend) error {
+		rememberUser(cfg, name, be.Self())
+		return fn(ctx, guard(be))
+	})
+	if errors.Is(err, core.ErrNotLoggedIn) && name != config.DefaultAccount {
+		return fmt.Errorf("account %q is not logged in, run `tg login --account %s`", name, name)
+	}
+	return err
 }
 
 func (a *app) meCmd() *command {

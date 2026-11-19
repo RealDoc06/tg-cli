@@ -1,6 +1,7 @@
 package mtp
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/gotd/td/tg"
@@ -10,8 +11,7 @@ import (
 
 func testStore(t *testing.T) *peerStore {
 	t.Helper()
-	t.Setenv("TG_CLI_HOME", t.TempDir())
-	return loadPeers()
+	return loadPeers(filepath.Join(t.TempDir(), "peers.json"))
 }
 
 // Chat IDs are what users and agents pass back in, so every kind of peer has
@@ -94,7 +94,7 @@ func TestPeersPersist(t *testing.T) {
 	if err := s.save(); err != nil {
 		t.Fatal(err)
 	}
-	if id, ok := loadPeers().byUsername("ANN"); !ok || id != 7 {
+	if id, ok := loadPeers(s.path).byUsername("ANN"); !ok || id != 7 {
 		t.Fatalf("byUsername after reload = %d, %v", id, ok)
 	}
 }
