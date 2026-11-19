@@ -26,16 +26,16 @@ type Theme struct {
 const DefaultTheme = "mocha"
 
 // Themes lists every theme, in the order `tg config` shows them. The four
-// Catppuccin flavors use their base, text, overlay1, surface1, sky and red,
+// Catppuccin flavors use their base, text, subtext0, surface1, sky and red,
 // with red, peach, mauve, green, teal, blue and pink for peers.
 var Themes = []Theme{
-	palette("mocha", "#1e1e2e", "#cdd6f4", "#7f849c", "#45475a", "#89dceb", "#f38ba8",
+	palette("mocha", "#1e1e2e", "#cdd6f4", "#a6adc8", "#45475a", "#89dceb", "#f38ba8",
 		"#f38ba8", "#fab387", "#cba6f7", "#a6e3a1", "#94e2d5", "#89b4fa", "#f5c2e7"),
-	palette("macchiato", "#24273a", "#cad3f5", "#8087a2", "#494d64", "#91d7e3", "#ed8796",
+	palette("macchiato", "#24273a", "#cad3f5", "#a5adcb", "#494d64", "#91d7e3", "#ed8796",
 		"#ed8796", "#f5a97f", "#c6a0f6", "#a6da95", "#8bd5ca", "#8aadf4", "#f5bde6"),
-	palette("frappe", "#303446", "#c6d0f5", "#838ba7", "#51576d", "#99d1db", "#e78284",
+	palette("frappe", "#303446", "#c6d0f5", "#a5adce", "#51576d", "#99d1db", "#e78284",
 		"#e78284", "#ef9f76", "#ca9ee6", "#a6d189", "#81c8be", "#8caaee", "#f4b8e4"),
-	palette("latte", "#eff1f5", "#4c4f69", "#8c8fa1", "#bcc0cc", "#04a5e5", "#d20f39",
+	palette("latte", "#eff1f5", "#4c4f69", "#6c6f85", "#bcc0cc", "#04a5e5", "#d20f39",
 		"#d20f39", "#fe640b", "#8839ef", "#40a02b", "#179299", "#1e66f5", "#ea76cb"),
 	// Telegram's own colors.
 	palette("dark", "#000000", "#ffffff", "#8a8a8a", "#303030", "#2aabee", "#ff6b6b",
@@ -65,14 +65,16 @@ func ThemeNames() []string {
 	return names
 }
 
-// FindTheme returns the theme called name, the default one for "".
+// FindTheme returns the theme called name, the default one for "". For a
+// name that is not a theme it returns the default and false.
 func FindTheme(name string) (Theme, bool) {
 	if name == "" {
 		name = DefaultTheme
 	}
 	i := slices.IndexFunc(Themes, func(t Theme) bool { return t.Name == name })
 	if i < 0 {
-		return Theme{}, false
+		t, _ := FindTheme(DefaultTheme)
+		return t, false
 	}
 	return Themes[i], true
 }

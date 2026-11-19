@@ -135,7 +135,6 @@ func newModel(ctx context.Context, be core.Backend, theme string) *model {
 	t, ok := FindTheme(theme)
 	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, avatars: map[int64]int{}}
 	if !ok {
-		t, _ = FindTheme(DefaultTheme)
 		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", theme, strings.Join(ThemeNames(), ", "))
 	}
 	m.st = newStyles(t)

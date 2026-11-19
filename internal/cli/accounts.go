@@ -212,6 +212,10 @@ Reading is never limited. Making them looser needs a person at a terminal:
 turning read-only off, adding to a list or dropping it. Tightening does not.`
 	lift := c.flags.Bool("any", false, "with allow: lift the limit, any chat can be written to")
 	c.run = func(ctx context.Context, args []string) error {
+		// The theme belongs to no account.
+		if len(args) > 0 && args[0] == "theme" {
+			return a.theme(args[1:])
+		}
 		account, cfg, err := a.active()
 		if err != nil {
 			return err
@@ -258,15 +262,6 @@ turning read-only off, adding to a list or dropping it. Tightening does not.`
 				}
 				return nil
 			})
-
-		case args[0] == "theme" && len(args) == 1:
-			return a.printThemes(cfg.Theme)
-
-		case args[0] == "theme" && len(args) == 2:
-			if _, ok := tui.FindTheme(args[1]); !ok {
-				return errUsage{fmt.Errorf("no theme %q, pick one of %s", args[1], strings.Join(tui.ThemeNames(), ", "))}
-			}
-			err = config.Update(func(f *config.File) error { f.Theme = args[1]; return nil })
 
 		case args[0] == "disallow" && len(args) > 1:
 			var ids []int64
@@ -388,17 +383,33 @@ func (a *app) printConfig(account string) error {
 	return nil
 }
 
-// themeName is the theme the TUI draws with: the configured one, or the default.
+// themeName is the theme the TUI draws with: the configured one, or the
+// default when none or an unknown one is configured.
 func themeName(name string) string {
-	if name == "" {
-		return tui.DefaultTheme
-	}
-	return name
+	t, _ := tui.FindTheme(name)
+	return t.Name
 }
 
-// printThemes lists the themes, * marking the one in use.
-func (a *app) printThemes(current string) error {
-	current = themeName(current)
+// theme runs `tg config theme [name]`: with a name it sets the theme, then
+// either way lists them, * marking the one in use.
+func (a *app) theme(args []string) error {
+	switch len(args) {
+	case 0:
+	case 1:
+		if _, ok := tui.FindTheme(args[0]); !ok {
+			return errUsage{fmt.Errorf("no theme %q, pick one of %s", args[0], strings.Join(tui.ThemeNames(), ", "))}
+		}
+		if err := config.Update(func(f *config.File) error { f.Theme = args[0]; return nil }); err != nil {
+			return err
+		}
+	default:
+		return errUsage{errors.New("usage: tg config theme [name]")}
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	current := themeName(cfg.Theme)
 	if a.json {
 		return emitJSON(map[string]any{"theme": current, "themes": tui.ThemeNames()})
 	}

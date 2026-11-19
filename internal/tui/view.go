@@ -260,13 +260,13 @@ func (m *model) messageLines(h *history, w int) []string {
 }
 
 func (m *model) statusLine() string {
-	// Pairs of key and what it does.
-	hints := []string{"↑↓", "move", "enter", "open", "/", "filter", "tab", "compose", "q", "quit"}
+	// Each hint is a key and what it does.
+	hints := [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "compose"}, {"q", "quit"}}
 	switch m.focus {
 	case focusInput:
-		hints = []string{"enter", "send", "pgup/pgdn", "scroll", "esc", "chats", "ctrl+c", "quit"}
+		hints = [][2]string{{"enter", "send"}, {"pgup/pgdn", "scroll"}, {"esc", "chats"}, {"ctrl+c", "quit"}}
 	case focusFilter:
-		hints = []string{"type", "to filter", "enter", "open", "esc", "clear"}
+		hints = [][2]string{{"type", "to filter"}, {"enter", "open"}, {"esc", "clear"}}
 	}
 	// An error takes the whole line: it is usually longer than what is left
 	// next to the hints, and matters more than them.
@@ -278,8 +278,8 @@ func (m *model) statusLine() string {
 		right = m.st.accent.Render(m.account) + "  " + right
 	}
 	var help strings.Builder
-	for i := 0; i < len(hints); i += 2 {
-		help.WriteString(" " + m.st.text.Render(hints[i]) + " " + m.st.muted.Render(hints[i+1]) + " ")
+	for _, h := range hints {
+		help.WriteString(" " + m.st.text.Render(h[0]) + " " + m.st.muted.Render(h[1]) + " ")
 	}
 	return spread(help.String(), right+" ", m.width)
 }
