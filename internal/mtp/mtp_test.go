@@ -114,6 +114,11 @@ func TestMessageAuthorInPrivateChat(t *testing.T) {
 	if out.From != "Me" || out.FromID != 1 || out.ReplyTo != 5 {
 		t.Errorf("outgoing = %+v", out)
 	}
+	// Saved Messages: Telegram does not flag the account's own notes as outgoing.
+	saved, _ := b.message(&tg.Message{ID: 7, PeerID: &tg.PeerUser{UserID: 1}, FromID: &tg.PeerUser{UserID: 1}}, e)
+	if !saved.Out || saved.From != "Me" {
+		t.Errorf("saved message = %+v", saved)
+	}
 	if _, ok := b.message(&tg.MessageEmpty{ID: 9}, e); ok {
 		t.Error("empty messages must be skipped")
 	}

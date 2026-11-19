@@ -22,6 +22,8 @@ func (b *backend) message(raw tg.MessageClass, e tg.Entities) (core.Message, boo
 			out.ReplyTo = reply.ReplyToMsgID
 		}
 		out.FromID, out.From = b.author(m.FromID, m.PeerID, m.Out, e)
+		// Saved Messages does not flag the account's own messages as outgoing.
+		out.Out = out.Out || out.FromID == b.self.ID
 		return out, true
 	case *tg.MessageService:
 		out := core.Message{

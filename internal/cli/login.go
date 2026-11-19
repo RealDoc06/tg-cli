@@ -84,14 +84,20 @@ and tg will ask for them here.`
 	c.flags.StringVar(&p.phone, "phone", "", "phone number, instead of asking")
 	c.flags.StringVar(&p.code, "code", "", "login code, instead of asking")
 	c.flags.StringVar(&p.password, "password", "", "two-step verification password, instead of asking")
-	apiID := c.flags.Int("api-id", 0, "Telegram API ID to save")
+	apiID := c.flags.String("api-id", "", "Telegram API ID to save")
 	apiHash := c.flags.String("api-hash", "", "Telegram API hash to save")
 	c.run = func(ctx context.Context, _ []string) error {
 		if os.Getenv("TG_DEMO") != "" {
 			return errors.New("TG_DEMO is set, there is nothing to log in to")
 		}
-		if *apiID != 0 && *apiHash != "" {
-			if err := (config.Credentials{APIID: *apiID, APIHash: *apiHash}).Save(); err != nil {
+		if *apiID != "" || *apiHash != "" {
+			// Parsed here rather than by the flag, so a hash pasted in the
+			// wrong place is not echoed back in an error message.
+			id, err := strconv.Atoi(*apiID)
+			if err != nil || *apiHash == "" {
+				return errUsage{errors.New("--api-id takes the numeric ID and needs --api-hash with it")}
+			}
+			if err := (config.Credentials{APIID: id, APIHash: *apiHash}).Save(); err != nil {
 				return err
 			}
 		}
@@ -103,7 +109,7 @@ and tg will ask for them here.`
 			}
 			n, err := strconv.Atoi(id)
 			if err != nil {
-				return fmt.Errorf("the API ID is a number, got %q", id)
+				return errors.New("the API ID is the short number, not the hash")
 			}
 			hash, err := p.ask(ctx, "API hash", "")
 			if err != nil {

@@ -112,7 +112,7 @@ func Run(ctx context.Context, opts Options, fn func(context.Context, core.Backen
 		return err
 	}
 
-	err = client.Run(ctx, func(ctx context.Context) error {
+	err = runClient(ctx, client, func(ctx context.Context) error {
 		status, err := client.Auth().Status(ctx)
 		if err != nil {
 			return err
@@ -147,6 +147,22 @@ func Run(ctx context.Context, opts Options, fn func(context.Context, core.Backen
 	return friendly(err)
 }
 
+// runClient connects, runs fn and disconnects. Once fn has run its error is
+// returned as is, without the layers the client wraps around it.
+func runClient(ctx context.Context, client *telegram.Client, fn func(context.Context) error) error {
+	var fnErr error
+	called := false
+	err := client.Run(ctx, func(ctx context.Context) error {
+		called = true
+		fnErr = fn(ctx)
+		return fnErr
+	})
+	if called {
+		return fnErr
+	}
+	return err
+}
+
 // friendly replaces the wrapped RPC error chain with one readable sentence.
 func friendly(err error) error {
 	if wait, ok := tgerr.AsFloodWait(err); ok {
@@ -178,7 +194,7 @@ func Login(ctx context.Context, opts Options, prompt Prompter) (core.User, error
 		return core.User{}, err
 	}
 	var user core.User
-	err = client.Run(ctx, func(ctx context.Context) error {
+	err = runClient(ctx, client, func(ctx context.Context) error {
 		flow := auth.NewFlow(authenticator{prompt}, auth.SendCodeOptions{})
 		if err := client.Auth().IfNecessary(ctx, flow); err != nil {
 			return err
@@ -202,7 +218,7 @@ func Logout(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	err = client.Run(ctx, func(ctx context.Context) error {
+	err = runClient(ctx, client, func(ctx context.Context) error {
 		_, err := client.LogOut(ctx)
 		return err
 	})

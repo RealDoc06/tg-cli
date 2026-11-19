@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -94,8 +95,11 @@ func Main(version string) int {
 
 	a := &app{version: version}
 	err := a.dispatch(ctx, os.Args[1:])
-	if err == nil {
+	switch {
+	case err == nil:
 		return 0
+	case errors.Is(ctx.Err(), context.Canceled):
+		return 130 // interrupted, nothing to report
 	}
 	fmt.Fprintln(os.Stderr, "tg:", err)
 	if errors.As(err, new(errUsage)) {
@@ -149,8 +153,20 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return errUsage{fmt.Errorf("unknown command %q, see `tg help`", name)}
 	}
 	cmd := commands[i]
-	if err := cmd.flags.Parse(args[1:]); err != nil {
-		return errUsage{fmt.Errorf("%w, see `tg %s --help`", err, name)}
+	// Group and channel IDs are negative numbers. Shield them so they are
+	// read as arguments, not as flags.
+	rest := slices.Clone(args[1:])
+	for i, arg := range rest {
+		if negativeID.MatchString(arg) {
+			rest[i] = shield + arg
+		}
+	}
+	if err := cmd.flags.Parse(rest); err != nil {
+		return errUsage{fmt.Errorf("%s, see `tg %s --help`", strings.ReplaceAll(err.Error(), shield, ""), name)}
+	}
+	positional := cmd.flags.Args()
+	for i, arg := range positional {
+		positional[i] = strings.TrimPrefix(arg, shield)
 	}
 	if h, _ := cmd.flags.GetBool("help"); h || wantHelp {
 		fmt.Print(cmd.help())
@@ -162,8 +178,13 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	if name != "update" {
 		selfupdate.AutoCheck(a.version)
 	}
-	return cmd.run(ctx, cmd.flags.Args())
+	return cmd.run(ctx, positional)
 }
+
+var negativeID = regexp.MustCompile(`^-\d+$`)
+
+// shield prefixes negative numbers while flags are parsed.
+const shield = "\x00"
 
 // backend opens Telegram, or the demo data when TG_DEMO is set.
 func (a *app) backend(ctx context.Context, updates bool, fn func(context.Context, core.Backend) error) error {
@@ -360,7 +381,8 @@ which is how an agent waits for a reply.`
 			ctx, cancel = context.WithTimeout(ctx, *timeout)
 			defer cancel()
 		}
-		return a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
+		var seen atomic.Int64
+		err := a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			only := map[int64]bool{}
@@ -371,7 +393,6 @@ which is how an agent waits for a reply.`
 				}
 				only[chat.ID] = true
 			}
-			var seen atomic.Int64
 			return be.Watch(ctx, func(ev core.Event) {
 				if (len(only) > 0 && !only[ev.Chat.ID]) || (ev.Message.Out && !*outgoing) || ctx.Err() != nil {
 					return
@@ -382,6 +403,15 @@ which is how an agent waits for a reply.`
 				}
 			})
 		})
+		// Running out of time is a normal way to stop, unless the caller was
+		// waiting for a number of messages that did not all arrive.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			if n := seen.Load(); *count > 0 && n < int64(*count) {
+				return fmt.Errorf("timed out after %s with %d of %d messages", *timeout, n, *count)
+			}
+			return nil
+		}
+		return err
 	}
 	return c
 }
