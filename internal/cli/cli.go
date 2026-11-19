@@ -1,0 +1,404 @@
+// Package cli defines the tg command line: one subcommand per Telegram
+// operation for agents and scripts, and the TUI when run bare in a terminal.
+package cli
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"slices"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"syscall"
+
+	"github.com/spf13/pflag"
+	"golang.org/x/term"
+
+	"github.com/RealDoc06/tg-cli/internal/core"
+	"github.com/RealDoc06/tg-cli/internal/demo"
+	"github.com/RealDoc06/tg-cli/internal/mtp"
+	"github.com/RealDoc06/tg-cli/internal/selfupdate"
+	"github.com/RealDoc06/tg-cli/internal/tui"
+)
+
+// app carries what every command needs.
+type app struct {
+	version string
+	json    bool
+}
+
+// command is one subcommand. Its flags are parsed anywhere on the line, so
+// "tg read alice -n 5" and "tg read -n 5 alice" are the same.
+type command struct {
+	use     string // name and arguments, like "read <chat>"
+	short   string
+	long    string
+	example string
+	minArgs int
+	maxArgs int // -1 for any number
+	flags   *pflag.FlagSet
+	run     func(ctx context.Context, args []string) error
+}
+
+func (c *command) name() string { return strings.Fields(c.use)[0] }
+
+// newCommand creates a command with the flags every command accepts.
+func (a *app) newCommand(use, short string, minArgs, maxArgs int) *command {
+	c := &command{use: use, short: short, minArgs: minArgs, maxArgs: maxArgs}
+	c.flags = pflag.NewFlagSet(c.name(), pflag.ContinueOnError)
+	c.flags.SortFlags = false
+	c.flags.SetOutput(io.Discard)
+	c.flags.BoolVar(&a.json, "json", false, "print one JSON object per line")
+	c.flags.BoolP("help", "h", false, "show this help")
+	return c
+}
+
+func (c *command) help() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\nUsage:\n  tg %s [flags]\n", cmp.Or(c.long, c.short), c.use)
+	if c.example != "" {
+		fmt.Fprintf(&b, "\nExamples:\n%s\n", c.example)
+	}
+	fmt.Fprintf(&b, "\nFlags:\n%s", c.flags.FlagUsages())
+	return b.String()
+}
+
+const intro = `tg gives agents and scripts read and write access to a Telegram account,
+and gives humans a terminal client. Run it bare for the TUI.
+
+Chats are addressed by numeric ID (see "tg chats"), @username, +phone,
+title, or "me" for Saved Messages.`
+
+func rootHelp(commands []*command) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\nUsage:\n  tg                    open the TUI\n  tg <command> [flags]\n\nCommands:\n", intro)
+	for _, c := range commands {
+		fmt.Fprintf(&b, "  %-11s %s\n", c.name(), c.short)
+	}
+	b.WriteString("\nFlags:\n      --json      print one JSON object per line\n  -h, --help      show help, also per command\n  -v, --version   show the version\n")
+	return b.String()
+}
+
+// errUsage marks mistakes in how tg was called.
+type errUsage struct{ error }
+
+// Main runs the command line and returns the process exit code.
+func Main(version string) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	a := &app{version: version}
+	err := a.dispatch(ctx, os.Args[1:])
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, "tg:", err)
+	if errors.As(err, new(errUsage)) {
+		return 2
+	}
+	return 1
+}
+
+func (a *app) dispatch(ctx context.Context, args []string) error {
+	commands := []*command{
+		a.loginCmd(), a.logoutCmd(), a.meCmd(), a.chatsCmd(), a.readCmd(), a.sendCmd(),
+		a.searchCmd(), a.markReadCmd(), a.downloadCmd(), a.watchCmd(), a.updateCmd(),
+	}
+
+	// Flags before the command name belong to tg itself.
+	root := pflag.NewFlagSet("tg", pflag.ContinueOnError)
+	root.SetInterspersed(false)
+	root.SetOutput(io.Discard)
+	root.BoolVar(&a.json, "json", false, "")
+	help := root.BoolP("help", "h", false, "")
+	showVersion := root.BoolP("version", "v", false, "")
+	if err := root.Parse(args); err != nil {
+		return errUsage{err}
+	}
+	args = root.Args()
+
+	switch {
+	case *showVersion || (len(args) > 0 && args[0] == "version"):
+		fmt.Println("tg", a.version)
+		return nil
+	case *help || (len(args) == 1 && args[0] == "help"):
+		fmt.Print(rootHelp(commands))
+		return nil
+	case len(args) == 0:
+		if !term.IsTerminal(int(os.Stdout.Fd())) {
+			fmt.Print(rootHelp(commands))
+			return nil
+		}
+		selfupdate.AutoCheck(a.version)
+		return a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
+			return tui.Run(ctx, be, a.version)
+		})
+	}
+
+	name, wantHelp := args[0], false
+	if name == "help" {
+		name, wantHelp, args = args[1], true, args[1:]
+	}
+	i := slices.IndexFunc(commands, func(c *command) bool { return c.name() == name })
+	if i < 0 {
+		return errUsage{fmt.Errorf("unknown command %q, see `tg help`", name)}
+	}
+	cmd := commands[i]
+	if err := cmd.flags.Parse(args[1:]); err != nil {
+		return errUsage{fmt.Errorf("%w, see `tg %s --help`", err, name)}
+	}
+	if h, _ := cmd.flags.GetBool("help"); h || wantHelp {
+		fmt.Print(cmd.help())
+		return nil
+	}
+	if n := cmd.flags.NArg(); n < cmd.minArgs || (cmd.maxArgs >= 0 && n > cmd.maxArgs) {
+		return errUsage{fmt.Errorf("usage: tg %s", cmd.use)}
+	}
+	if name != "update" {
+		selfupdate.AutoCheck(a.version)
+	}
+	return cmd.run(ctx, cmd.flags.Args())
+}
+
+// backend opens Telegram, or the demo data when TG_DEMO is set.
+func (a *app) backend(ctx context.Context, updates bool, fn func(context.Context, core.Backend) error) error {
+	if os.Getenv("TG_DEMO") != "" {
+		return fn(ctx, demo.New())
+	}
+	return mtp.Run(ctx, mtp.Options{Version: a.version, Updates: updates}, fn)
+}
+
+func (a *app) meCmd() *command {
+	c := a.newCommand("me", "Show the logged in account", 0, 0)
+	c.run = func(ctx context.Context, _ []string) error {
+		return a.backend(ctx, false, func(_ context.Context, be core.Backend) error {
+			return a.printUser(be.Self())
+		})
+	}
+	return c
+}
+
+func (a *app) chatsCmd() *command {
+	c := a.newCommand("chats", "List chats, most recent first", 0, 0)
+	limit := c.flags.IntP("limit", "n", 30, "maximum number of chats")
+	unread := c.flags.BoolP("unread", "u", false, "only chats with unread messages")
+	query := c.flags.StringP("query", "q", "", "only chats whose title or username contains this")
+	c.run = func(ctx context.Context, _ []string) error {
+		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
+			// Filters apply after fetching, so look further back for them.
+			fetch := *limit
+			if *unread || *query != "" {
+				fetch = max(*limit, 300)
+			}
+			chats, err := be.Chats(ctx, core.ChatQuery{Limit: fetch})
+			if err != nil {
+				return err
+			}
+			needle := strings.ToLower(*query)
+			var out []core.Chat
+			for _, chat := range chats {
+				matches := strings.Contains(strings.ToLower(chat.Title), needle) || strings.Contains(strings.ToLower(chat.Username), needle)
+				if matches && (!*unread || chat.Unread > 0) && len(out) < *limit {
+					out = append(out, chat)
+				}
+			}
+			return a.printChats(out)
+		})
+	}
+	return c
+}
+
+func (a *app) readCmd() *command {
+	c := a.newCommand("read <chat>", "Print the latest messages of a chat, oldest first", 1, 1)
+	var q core.HistoryQuery
+	c.flags.IntVarP(&q.Limit, "limit", "n", 30, "maximum number of messages")
+	c.flags.IntVar(&q.BeforeID, "before", 0, "only messages older than this message ID")
+	c.flags.IntVar(&q.AfterID, "after", 0, "only messages newer than this message ID")
+	markRead := c.flags.Bool("mark-read", false, "mark the chat as read up to the last printed message")
+	c.run = func(ctx context.Context, args []string) error {
+		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
+			chat, err := be.Resolve(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			msgs, err := be.History(ctx, chat.ID, q)
+			if err != nil {
+				return err
+			}
+			if *markRead && len(msgs) > 0 {
+				if err := be.MarkRead(ctx, chat.ID, msgs[len(msgs)-1].ID); err != nil {
+					return err
+				}
+			}
+			return a.printMessages(&chat, msgs)
+		})
+	}
+	return c
+}
+
+func (a *app) sendCmd() *command {
+	c := a.newCommand("send <chat> [text...]", "Send a message, text comes from the arguments or from stdin", 1, -1)
+	c.example = `  tg send @alice "on my way"
+  tg send me --file report.pdf "today's report"
+  git log -5 --oneline | tg send "Dev Team"`
+	var req core.SendRequest
+	c.flags.IntVar(&req.ReplyTo, "reply-to", 0, "message ID to reply to")
+	c.flags.StringVarP(&req.File, "file", "f", "", "file to attach, the text becomes its caption")
+	c.run = func(ctx context.Context, args []string) error {
+		req.Text = strings.Join(args[1:], " ")
+		if len(args) == 1 || req.Text == "-" {
+			req.Text = ""
+			if !term.IsTerminal(int(os.Stdin.Fd())) {
+				data, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return err
+				}
+				req.Text = strings.TrimRight(string(data), "\r\n")
+			}
+		}
+		if req.Text == "" && req.File == "" {
+			return errUsage{errors.New("nothing to send: give the text as arguments, on stdin, or attach a --file")}
+		}
+		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
+			chat, err := be.Resolve(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			sent, err := be.Send(ctx, chat.ID, req)
+			if err != nil {
+				return err
+			}
+			return a.printSent(chat, sent)
+		})
+	}
+	return c
+}
+
+func (a *app) searchCmd() *command {
+	c := a.newCommand("search <text...>", "Search messages everywhere or in one chat", 1, -1)
+	chatRef := c.flags.StringP("chat", "c", "", "search only in this chat")
+	limit := c.flags.IntP("limit", "n", 30, "maximum number of messages")
+	c.run = func(ctx context.Context, args []string) error {
+		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
+			q := core.SearchQuery{Text: strings.Join(args, " "), Limit: *limit}
+			var chat *core.Chat
+			if *chatRef != "" {
+				resolved, err := be.Resolve(ctx, *chatRef)
+				if err != nil {
+					return err
+				}
+				chat, q.ChatID = &resolved, resolved.ID
+			}
+			msgs, err := be.Search(ctx, q)
+			if err != nil {
+				return err
+			}
+			return a.printMessages(chat, msgs)
+		})
+	}
+	return c
+}
+
+func (a *app) markReadCmd() *command {
+	c := a.newCommand("mark-read <chat>", "Mark every message of a chat as read", 1, 1)
+	c.run = func(ctx context.Context, args []string) error {
+		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
+			chat, err := be.Resolve(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			last, err := be.History(ctx, chat.ID, core.HistoryQuery{Limit: 1})
+			if err != nil || len(last) == 0 {
+				return err
+			}
+			return be.MarkRead(ctx, chat.ID, last[0].ID)
+		})
+	}
+	return c
+}
+
+func (a *app) downloadCmd() *command {
+	c := a.newCommand("download <chat> <message-id>", "Download the photo or file of a message", 2, 2)
+	dir := c.flags.StringP("output", "o", ".", "directory to save into")
+	c.run = func(ctx context.Context, args []string) error {
+		msgID, err := strconv.Atoi(args[1])
+		if err != nil {
+			return errUsage{fmt.Errorf("invalid message ID %q", args[1])}
+		}
+		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
+			chat, err := be.Resolve(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			path, err := be.Download(ctx, chat.ID, msgID, *dir)
+			if err != nil {
+				return err
+			}
+			return a.printPath(path)
+		})
+	}
+	return c
+}
+
+func (a *app) watchCmd() *command {
+	c := a.newCommand("watch [chat...]", "Print new messages as they arrive", 0, -1)
+	c.long = `Print new and edited messages as they arrive, from every chat or only from
+the given ones. Runs until interrupted, or until --count or --timeout is hit,
+which is how an agent waits for a reply.`
+	c.example = `  tg watch @alice --count 1 --timeout 10m`
+	count := c.flags.Int("count", 0, "stop after this many messages")
+	timeout := c.flags.Duration("timeout", 0, "stop after this long, for example 90s or 10m")
+	outgoing := c.flags.Bool("outgoing", false, "also print messages sent by this account")
+	c.run = func(ctx context.Context, args []string) error {
+		if *timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, *timeout)
+			defer cancel()
+		}
+		return a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			only := map[int64]bool{}
+			for _, ref := range args {
+				chat, err := be.Resolve(ctx, ref)
+				if err != nil {
+					return err
+				}
+				only[chat.ID] = true
+			}
+			var seen atomic.Int64
+			return be.Watch(ctx, func(ev core.Event) {
+				if (len(only) > 0 && !only[ev.Chat.ID]) || (ev.Message.Out && !*outgoing) || ctx.Err() != nil {
+					return
+				}
+				a.printEvent(ev)
+				if n := seen.Add(1); *count > 0 && n >= int64(*count) {
+					cancel()
+				}
+			})
+		})
+	}
+	return c
+}
+
+func (a *app) updateCmd() *command {
+	c := a.newCommand("update", "Update tg to the latest release", 0, 0)
+	c.run = func(ctx context.Context, _ []string) error {
+		version, changed, err := selfupdate.Update(ctx, a.version)
+		if err != nil {
+			return err
+		}
+		if changed {
+			fmt.Printf("updated tg %s -> %s\n", a.version, version)
+		} else {
+			fmt.Printf("tg %s is up to date\n", version)
+		}
+		return nil
+	}
+	return c
+}
