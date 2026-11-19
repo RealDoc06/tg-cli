@@ -30,7 +30,7 @@ main() {
   dir=${TG_INSTALL_DIR:-$HOME/.local/bin}
   asset=tg_${os}_${arch}${ext}
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
+  trap "rm -rf '$tmp'" EXIT # expanded now: tmp is gone by the time the trap runs
 
   echo "Downloading $asset"
   curl -fsSL "https://github.com/$repo/releases/latest/download/$asset" -o "$tmp/$asset" ||

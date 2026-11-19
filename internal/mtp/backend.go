@@ -99,7 +99,10 @@ func (b *backend) Chats(ctx context.Context, q core.ChatQuery) ([]core.Chat, err
 			}
 			id := chatIDOf(d.Peer)
 			b.peers.markDialog(id)
-			chat, _ := b.peers.chat(id)
+			chat, known := b.peers.chat(id)
+			if !known {
+				chat.Title = "Unavailable chat" // banned from it, or it was deleted
+			}
 			chat.Unread, chat.Pinned = d.UnreadCount, d.Pinned
 			if m, ok := last[key{id, d.TopMessage}]; ok {
 				chat.Last = &m
