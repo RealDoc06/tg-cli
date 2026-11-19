@@ -370,11 +370,14 @@ func TestLoginArgumentsAreNotLogged(t *testing.T) {
 	}
 }
 
-// scripted is a backend that replays a fixed conversation to a watcher.
+// scripted is a backend that replays a fixed conversation to a watcher. Its
+// history only answers once the live events were handed over, like a busy
+// account where messages keep arriving while the backlog loads.
 type scripted struct {
 	core.Backend
-	backlog []core.Message
-	live    []core.Event
+	backlog   []core.Message
+	live      []core.Event
+	delivered chan struct{}
 }
 
 func (s scripted) Resolve(context.Context, string) (core.Chat, error) {
@@ -382,7 +385,12 @@ func (s scripted) Resolve(context.Context, string) (core.Chat, error) {
 }
 
 func (s scripted) History(context.Context, int64, core.HistoryQuery) ([]core.Message, error) {
-	return s.backlog, nil
+	select {
+	case <-s.delivered:
+		return s.backlog, nil
+	case <-time.After(5 * time.Second):
+		return nil, errors.New("live events were held up by the catch-up")
+	}
 }
 
 func (s scripted) Watch(ctx context.Context, fn func(core.Event)) error {
@@ -390,6 +398,7 @@ func (s scripted) Watch(ctx context.Context, fn func(core.Event)) error {
 	for _, ev := range s.live {
 		fn(ev)
 	}
+	close(s.delivered)
 	<-ctx.Done()
 	return nil
 }
@@ -402,10 +411,12 @@ func TestWatchJoinsBacklogAndLiveStream(t *testing.T) {
 		return core.Message{ID: id, ChatID: 1, From: "Ann", Text: text, Date: time.Unix(0, 0)}
 	}
 	be := scripted{
-		backlog: []core.Message{msg(4, "four"), msg(5, "five")},
+		delivered: make(chan struct{}),
+		backlog:   []core.Message{msg(4, "four"), msg(5, "five")},
 		live: []core.Event{
 			{Kind: core.EventMessage, Chat: chat, Message: msg(5, "five")},     // also in the backlog
 			{Kind: core.EventEdit, Chat: chat, Message: msg(2, "two, edited")}, // older than the cursor
+			{Kind: core.EventEdit, Chat: chat, Message: msg(4, "four")},        // the backlog shows it
 			{Kind: core.EventMessage, Chat: core.Chat{ID: 9}, Message: msg(8, "elsewhere")},
 			{Kind: core.EventMessage, Chat: chat, Message: msg(6, "six")},
 			{Kind: core.EventMessage, Chat: chat, Message: msg(7, "seven")}, // past --count

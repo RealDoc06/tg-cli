@@ -240,6 +240,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 // inside reports whether path is parent itself or lies under it. Symbolic
 // links are followed as far as the path exists, so a link that leads into
 // parent is caught even when the directory below it has yet to be created.
+// Folders are compared as files, not as text: another spelling of the same
+// directory on a case-insensitive disk is still that directory.
 func inside(parent, path string) bool {
 	resolve := func(p string) string {
 		abs, err := filepath.Abs(p)
@@ -257,8 +259,22 @@ func inside(parent, path string) bool {
 			rest = filepath.Join(filepath.Base(dir), rest)
 		}
 	}
-	rel, err := filepath.Rel(resolve(parent), resolve(path))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	root, target := resolve(parent), resolve(path)
+	if rel, err := filepath.Rel(root, target); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return true
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return false
+	}
+	for dir := target; ; dir = filepath.Dir(dir) {
+		if info, err := os.Stat(dir); err == nil && os.SameFile(info, rootInfo) {
+			return true
+		}
+		if dir == filepath.Dir(dir) {
+			return false
+		}
+	}
 }
 
 // maxBacklog bounds what `watch --after` catches up on. Hitting it is an
@@ -498,8 +514,8 @@ func (a *app) downloadCmd() *command {
 		if err != nil {
 			return errUsage{fmt.Errorf("invalid message ID %q", args[1])}
 		}
-		// The file name comes from the chat. Saved next to config.json, a
-		// file with the right name would replace the guardrails.
+		// The file name comes from the chat. Saved among tg's own files, one
+		// with the right name could be taken for a session or settings.
 		if inside(config.Dir(), *dir) {
 			return &core.RefusedError{Reason: fmt.Sprintf("%s is where tg keeps its own files, download somewhere else", *dir)}
 		}
@@ -657,7 +673,13 @@ func (a *app) watch(ctx context.Context, be core.Backend, opts watchOptions) (wa
 		for _, m := range backlog {
 			show(core.Event{Kind: core.EventMessage, Chat: chat, Message: m})
 		}
+		covered := newest
 		for _, ev := range pending {
+			// The backlog was read after these edits were made, so it
+			// already shows the edited text.
+			if ev.Kind == core.EventEdit && ev.Message.ID <= covered {
+				continue
+			}
 			show(ev)
 		}
 		pending, catchingUp = nil, false

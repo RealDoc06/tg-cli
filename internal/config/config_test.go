@@ -141,13 +141,14 @@ func TestLoadRejectsBrokenHandEdits(t *testing.T) {
 	t.Setenv("TG_CLI_HOME", t.TempDir())
 	t.Setenv("TG_DEMO", "")
 	for name, content := range map[string]string{
-		"a misspelled key":       `{"accounts": {"default": {"readonly": true}}}`,
-		"text after the object":  `{"account": "default"} {"account": "other"}`,
-		"a null account":         `{"accounts": {"default": null}}`,
-		"null":                   `null`,
-		"a stray brace":          `{} }`,
-		"a stray bracket":        `{} ]`,
-		"an unfinished document": `{"accounts": {`,
+		"a misspelled key":             `{"accounts": {"default": {"readonly": true}}}`,
+		"text after the object":        `{"account": "default"} {"account": "other"}`,
+		"a null account":               `{"accounts": {"default": null}}`,
+		"null":                         `null`,
+		"an account named like a path": `{"accounts": {"../escape": {}}}`,
+		"a stray brace":                `{} }`,
+		"a stray bracket":              `{} ]`,
+		"an unfinished document":       `{"accounts": {`,
 	} {
 		if err := os.WriteFile(FilePath(), []byte(content), 0o600); err != nil {
 			t.Fatal(err)

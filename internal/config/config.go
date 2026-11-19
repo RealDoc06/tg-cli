@@ -132,6 +132,11 @@ func Load() (*File, error) {
 		return nil, fmt.Errorf("%s is not valid: there is text after the closing brace", FilePath())
 	}
 	for name, account := range f.Accounts {
+		// Names become directories: one like "../x" must never get as far
+		// as a command that creates or removes them.
+		if err := CheckName(name); err != nil {
+			return nil, fmt.Errorf("%s is not valid: %w", FilePath(), err)
+		}
 		if account == nil {
 			return nil, fmt.Errorf("%s is not valid: account %q is null, give it {} or remove it", FilePath(), name)
 		}
