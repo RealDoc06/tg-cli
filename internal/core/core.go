@@ -5,6 +5,8 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"time"
 )
 
@@ -129,8 +131,20 @@ type Backend interface {
 	// Download saves the media of a message into dir and returns the file path.
 	Download(ctx context.Context, chatID int64, msgID int, dir string) (string, error)
 	// Watch blocks and reports live events until ctx is done, starting with
-	// an EventReady. No other event is delivered while fn handles that one.
+	// an EventReady. fn must return quickly: nothing else is delivered, and
+	// requests to the backend may stall, while it runs.
 	Watch(ctx context.Context, fn func(Event)) error
+}
+
+// CreateNew creates the file a download is saved to. The name comes from
+// whoever sent the file, so it may never replace a file that is already
+// there: creating it is refused instead, atomically.
+func CreateNew(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if os.IsExist(err) {
+		return nil, fmt.Errorf("%s already exists, pick another directory with -o", path)
+	}
+	return file, err
 }
 
 // Preview is the one line summary of a message used in chat lists.

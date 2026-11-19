@@ -326,6 +326,16 @@ func TestAccounts(t *testing.T) {
 	if cfg, _ := config.Load(); cfg.Account != "default" || cfg.Accounts["work"] != nil {
 		t.Errorf("after removing the default account: %+v", cfg)
 	}
+
+	// The same when the file names no default: "default" is it, and
+	// removing it must hand over to an account that exists.
+	writeConfig(t, `{"accounts": {"default": {}, "work": {}}}`)
+	if err := run(t, "logout"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := config.Load(); cfg.Default() != "work" {
+		t.Errorf("default after removing the implicit one: %q", cfg.Default())
+	}
 }
 
 // Login flags carry the code and the password. They must stay out of the
@@ -422,7 +432,7 @@ func TestWatchJoinsBacklogAndLiveStream(t *testing.T) {
 // A file sent to a chat is named by its sender. Downloading it must not be
 // a way to replace tg's own files, the guardrails among them.
 func TestDownloadCannotTargetTheStateDirectory(t *testing.T) {
-	if err := run(t, "config"); err != nil { // sets up the home directory
+	if err := run(t, "config", "read-only", "on"); err != nil { // creates tg's directory
 		t.Fatal(err)
 	}
 	for _, dir := range []string{config.Dir(), filepath.Join(config.Dir(), "accounts", "default")} {
@@ -430,8 +440,22 @@ func TestDownloadCannotTargetTheStateDirectory(t *testing.T) {
 			t.Errorf("downloading into %s: %v", dir, err)
 		}
 	}
-	if err := run(t, "download", "alice", "5", "-o", t.TempDir()); err != nil {
+	// A link that leads into the directory is no way around, also when the
+	// folder below it has yet to be created.
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(config.Dir(), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t, "download", "alice", "5", "-o", filepath.Join(link, "new")); !refused(err) {
+		t.Errorf("downloading through a link: %v", err)
+	}
+
+	elsewhere := t.TempDir()
+	if err := run(t, "download", "alice", "5", "-o", elsewhere); err != nil {
 		t.Errorf("downloading elsewhere: %v", err)
+	}
+	if err := run(t, "download", "alice", "5", "-o", elsewhere); err == nil {
+		t.Error("the second download replaced the first file")
 	}
 }
 

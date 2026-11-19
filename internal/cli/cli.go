@@ -237,18 +237,25 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	return cmd.run(ctx, positional)
 }
 
-// inside reports whether path is parent itself or lies under it, following
-// symbolic links where they exist.
+// inside reports whether path is parent itself or lies under it. Symbolic
+// links are followed as far as the path exists, so a link that leads into
+// parent is caught even when the directory below it has yet to be created.
 func inside(parent, path string) bool {
 	resolve := func(p string) string {
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			return p
 		}
-		if real, err := filepath.EvalSymlinks(abs); err == nil {
-			return real
+		rest := ""
+		for dir := abs; ; dir = filepath.Dir(dir) {
+			if real, err := filepath.EvalSymlinks(dir); err == nil {
+				return filepath.Join(real, rest)
+			}
+			if dir == filepath.Dir(dir) {
+				return abs
+			}
+			rest = filepath.Join(filepath.Base(dir), rest)
 		}
-		return abs
 	}
 	rel, err := filepath.Rel(resolve(parent), resolve(path))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
@@ -590,12 +597,16 @@ func (a *app) watch(ctx context.Context, be core.Backend, opts watchOptions) (wa
 		only[chat.ID] = chat
 	}
 
+	// mu guards everything below. Live events that arrive while the backlog
+	// loads wait in pending, so that they print after it.
 	var mu sync.Mutex
 	var stats watchStats
+	var pending []core.Event
+	var catchUpErr error
+	catchingUp := opts.after > 0
 	newest := opts.after // highest message ID handled so far, used with after
-	show := func(ev core.Event) {
-		mu.Lock()
-		defer mu.Unlock()
+
+	show := func(ev core.Event) { // called with mu held
 		if _, wanted := only[ev.Chat.ID]; (len(only) > 0 && !wanted) || ctx.Err() != nil {
 			return
 		}
@@ -621,36 +632,56 @@ func (a *app) watch(ctx context.Context, be core.Backend, opts watchOptions) (wa
 		}
 	}
 
-	var catchUpErr error
-	err := be.Watch(ctx, func(ev core.Event) {
-		if ev.Kind != core.EventReady {
-			show(ev)
+	// catchUp runs beside the live stream, not inside the ready callback:
+	// the backend cannot deliver anything, the answer to this very request
+	// included, while a callback holds it up.
+	catchUp := func() {
+		var backlog []core.Message
+		var chat core.Chat
+		var err error
+		for _, chat = range only {
+			backlog, err = be.History(ctx, chat.ID, core.HistoryQuery{AfterID: opts.after, Limit: maxBacklog})
+		}
+		if err == nil && len(backlog) == maxBacklog {
+			err = fmt.Errorf("more than %d messages are newer than %d, page through them with `tg read --after`", maxBacklog-1, opts.after)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
+			// Watching on would report later messages as if they were the
+			// first ones.
+			catchUpErr = fmt.Errorf("catching up after message %d: %w", opts.after, err)
+			cancel()
 			return
 		}
-		// The subscription is live and holds back new messages until this
-		// returns: the moment to catch up.
-		for _, chat := range only {
-			if opts.after == 0 {
-				break
-			}
-			backlog, err := be.History(ctx, chat.ID, core.HistoryQuery{AfterID: opts.after, Limit: maxBacklog})
-			if err == nil && len(backlog) == maxBacklog {
-				err = fmt.Errorf("more than %d messages are newer than %d, page through them with `tg read --after`", maxBacklog-1, opts.after)
-			}
-			if err != nil {
-				// Watching on would report later messages as if they were
-				// the first ones.
-				catchUpErr = fmt.Errorf("catching up after message %d: %w", opts.after, err)
-				cancel()
-				return
-			}
-			for _, m := range backlog {
-				show(core.Event{Kind: core.EventMessage, Chat: chat, Message: m})
-			}
+		for _, m := range backlog {
+			show(core.Event{Kind: core.EventMessage, Chat: chat, Message: m})
 		}
+		for _, ev := range pending {
+			show(ev)
+		}
+		pending, catchingUp = nil, false
+	}
+
+	var caughtUp sync.WaitGroup
+	err := be.Watch(ctx, func(ev core.Event) {
+		if ev.Kind == core.EventReady {
+			// Live from here on: what came before is fetched, what comes
+			// after is delivered.
+			if opts.after > 0 {
+				caughtUp.Go(catchUp)
+			}
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if catchingUp {
+			pending = append(pending, ev)
+			return
+		}
+		show(ev)
 	})
-	mu.Lock()
-	defer mu.Unlock()
+	caughtUp.Wait()
 	stats.catchUpFailed = catchUpErr != nil
 	// The catch-up error is returned from here so the backend words it like
 	// any other Telegram error.

@@ -144,6 +144,9 @@ func TestLoadRejectsBrokenHandEdits(t *testing.T) {
 		"a misspelled key":       `{"accounts": {"default": {"readonly": true}}}`,
 		"text after the object":  `{"account": "default"} {"account": "other"}`,
 		"a null account":         `{"accounts": {"default": null}}`,
+		"null":                   `null`,
+		"a stray brace":          `{} }`,
+		"a stray bracket":        `{} ]`,
 		"an unfinished document": `{"accounts": {`,
 	} {
 		if err := os.WriteFile(FilePath(), []byte(content), 0o600); err != nil {

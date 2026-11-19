@@ -454,13 +454,19 @@ func (b *backend) Download(ctx context.Context, chatID int64, msgID int, dir str
 		return "", err
 	}
 	path := filepath.Join(dir, name)
-	// The name is chosen by whoever sent the file: it must never be able to
-	// replace a file that is already there.
-	if _, err := os.Stat(path); err == nil {
-		return "", fmt.Errorf("%s already exists, pick another directory with -o", path)
+	file, err := core.CreateNew(path)
+	if err != nil {
+		return "", err
 	}
-	_, err = b.client.Download(location).ToPath(ctx, path)
-	return path, err
+	_, err = b.client.Download(location).Stream(ctx, file)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(path) // nothing half written stays behind
+		return "", err
+	}
+	return path, nil
 }
 
 func (b *backend) Watch(ctx context.Context, fn func(core.Event)) error {
@@ -469,7 +475,8 @@ func (b *backend) Watch(ctx context.Context, fn func(core.Event)) error {
 	}
 	b.onEvent.Store(&fn)
 	// OnStart runs once the update state is loaded and before any update is
-	// handed out, which is exactly the EventReady contract.
+	// handed out, which is exactly the EventReady contract. Updates queue up
+	// behind it in a small buffer, hence fn must not linger.
 	err := b.gaps.Run(ctx, b.api, b.self.ID, updates.AuthOptions{
 		OnStart: func(context.Context) { fn(core.Event{Kind: core.EventReady}) },
 	})

@@ -25,9 +25,10 @@ type logEntry struct {
 	TTY     bool      `json:"tty"`
 }
 
-// logInvocation appends a command to log.jsonl next to the session: a local
-// record of what was done to the account, most useful when the caller was an
-// agent. TG_NO_LOG=1 turns it off. Failing to log never fails the command.
+// logInvocation appends a command to log.jsonl in tg's directory, so the
+// owner can see what was run, most usefully by an agent. It is a
+// convenience, not an audit trail: TG_NO_LOG=1 turns it off. Failing to log
+// never fails the command.
 func logInvocation(account, command string, args []string, started time.Time, exit int, err error) {
 	if os.Getenv("TG_NO_LOG") != "" || os.Getenv("TG_DEMO") != "" || len(args) == 0 {
 		return

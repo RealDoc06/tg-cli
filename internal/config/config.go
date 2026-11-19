@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -109,10 +110,9 @@ type Chat struct {
 // Load reads config.json. A missing file is an empty configuration, a file
 // that does not parse is an error: guessing would silently drop guardrails.
 func Load() (*File, error) {
-	f := &File{}
 	data, err := os.ReadFile(FilePath())
 	if os.IsNotExist(err) {
-		return f, nil
+		return &File{}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -121,10 +121,14 @@ func Load() (*File, error) {
 	// that is set.
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(f); err != nil {
+	var f *File
+	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("%s is not valid: %w", FilePath(), err)
 	}
-	if dec.More() {
+	if f == nil {
+		return nil, fmt.Errorf("%s is not valid: it holds null, not settings", FilePath())
+	}
+	if _, err := dec.Token(); err != io.EOF {
 		return nil, fmt.Errorf("%s is not valid: there is text after the closing brace", FilePath())
 	}
 	for name, account := range f.Accounts {

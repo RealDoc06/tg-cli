@@ -287,8 +287,17 @@ func (b *Backend) Avatar(_ context.Context, chat core.Chat) ([]byte, error) {
 }
 
 func (b *Backend) Download(_ context.Context, chatID int64, msgID int, dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
 	path := filepath.Join(dir, fmt.Sprintf("demo_%d_%d.txt", chatID, msgID))
-	return path, os.WriteFile(path, []byte("demo media\n"), 0o644)
+	file, err := core.CreateNew(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	_, err = file.WriteString("demo media\n")
+	return path, err
 }
 
 func (b *Backend) Watch(ctx context.Context, fn func(core.Event)) error {

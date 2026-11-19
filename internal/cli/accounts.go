@@ -132,8 +132,9 @@ func (a *app) logout(ctx context.Context, name string) error {
 		}
 	}
 	err := config.Update(func(f *config.File) error {
+		wasDefault := f.Default() == name
 		delete(f.Accounts, name)
-		if f.Account == name {
+		if wasDefault {
 			f.Account = ""
 			if rest := f.Names(); len(rest) > 0 {
 				f.Account = rest[0]
