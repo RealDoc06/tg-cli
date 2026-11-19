@@ -32,7 +32,6 @@
   --bg: #000;
   --fg: #f4f4f5;
   --muted: #a1a1aa;
-  --faint: #71717a;
   --line: #27272a;
   /* Catppuccin Mocha */
   --base: #1e1e2e;
@@ -56,7 +55,7 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html { background: var(--bg); -webkit-text-size-adjust: 100%; scroll-padding-top: 1.5rem; }
+html { background: var(--bg); -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   /* Keeps content clear of the notch and home bar when shown full screen. */
@@ -94,8 +93,8 @@ code { font-family: var(--mono); font-size: .9em; color: var(--fg); white-space:
 .top nav a:hover { color: var(--fg); }
 
 .hero { display: grid; gap: 1.5rem; padding-block: clamp(2.5rem, 8vw, 6rem) clamp(2.5rem, 6vw, 4rem); }
-.note { font-size: .95rem; color: var(--faint); }
-.note code { color: var(--muted); }
+.note, figcaption { font-size: .95rem; color: var(--muted); }
+.note a { text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: .2em; }
 
 section { padding-block: clamp(3rem, 7vw, 5.5rem); }
 .head { display: grid; gap: 1rem; margin-bottom: clamp(1.75rem, 4vw, 2.75rem); }
@@ -115,8 +114,8 @@ section { padding-block: clamp(3rem, 7vw, 5.5rem); }
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-inline: 1rem; background: var(--mantle); border-bottom: 1px solid var(--surface); }
 .tabs { display: flex; gap: 1.25rem; }
 .bar button, .bar .label { padding: .65rem 0; border: 0; background: none; color: var(--overlay); font: 500 .8rem var(--mono); }
-.bar button:hover, .bar button[aria-selected="true"] { color: var(--text); }
-.bar button[aria-selected="true"] { box-shadow: inset 0 -2px var(--sky); }
+.bar button:hover, .bar button[aria-pressed="true"] { color: var(--text); }
+.bar button[aria-pressed="true"] { box-shadow: inset 0 -2px var(--sky); }
 pre, .cmd code {
   font: 400 .84rem/1.65 var(--mono);
   color: var(--text);
@@ -125,8 +124,9 @@ pre, .cmd code {
 }
 pre { margin: 0; padding: 1rem 1.1rem; overflow-x: auto; }
 pre .t { white-space: pre; }   /* tables scroll sideways instead of wrapping */
-.p, .dim, .k { color: var(--overlay); }
-.p { user-select: none; }
+pre.idle > span { visibility: hidden; }   /* waits, out of sight, to be typed */
+.p { color: var(--overlay); user-select: none; }
+.dim, .k { color: var(--subtext); }
 .e { color: var(--red); }
 .fn { color: var(--blue); }
 .str, .me { color: var(--green); }
@@ -145,7 +145,7 @@ pre .cur { background: var(--text); }
   justify-content: center;
   min-width: 5rem;
   padding: .6rem 1rem;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: .5rem;
   background: var(--sky);
   color: var(--crust);
@@ -154,16 +154,12 @@ pre .cur { background: var(--text); }
   white-space: nowrap;
 }
 .btn:hover { background: #a5e6f2; }
-.btn.ghost { border-color: var(--line); background: none; color: var(--fg); }
-.btn.ghost:hover { border-color: var(--faint); background: none; }
 
+figure { display: grid; gap: 1rem; margin-block: 0; }
 .shot { border: 1px solid var(--surface); border-radius: var(--radius); }
-.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
+.phone-only { display: none; }
 
-.end { display: grid; gap: 1.75rem; justify-items: start; }
-.end .actions { display: flex; flex-wrap: wrap; gap: .75rem; }
-
-footer { border-top: 1px solid var(--line); padding-block: 1.75rem 2.25rem; font-size: .9rem; color: var(--faint); }
+footer { border-top: 1px solid var(--line); padding-block: 1.75rem 2.25rem; font-size: .9rem; color: var(--muted); }
 footer .wrap { display: flex; flex-wrap: wrap; gap: .6rem 1.75rem; justify-content: space-between; }
 footer nav { display: flex; flex-wrap: wrap; gap: .6rem 1.5rem; }
 footer a:hover { color: var(--fg); }
@@ -172,14 +168,19 @@ footer a:hover { color: var(--fg); }
   .split { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 40rem) {
-  .pair { grid-template-columns: minmax(0, 1fr); }
-  .pair .wide-only { display: none; }
+  .phone-only { display: block; }
   .checks.row { display: grid; }
+  .bar { padding-inline: .85rem; }
+  .tabs { gap: 1rem; }
   pre { font-size: .74rem; padding: .85rem; }
   .cmd { padding: .85rem; gap: .75rem; }
   .btn { min-width: 4.25rem; padding-inline: .75rem; }
 }
+@media (prefers-reduced-motion: reduce) {
+  [data-replay] { display: none; }   /* nothing to replay when nothing is typed */
+}
 </style>
+<noscript><style>.tabs button:not([aria-pressed="true"]), #copy, [data-replay] { display: none; }</style></noscript>
 </head>
 <body>
 
@@ -196,28 +197,30 @@ footer a:hover { color: var(--fg); }
   <h1>Telegram for agents and humans.</h1>
   <p class="lead">One binary. Plain commands for your agent, a fast terminal client for you.</p>
 
-  <div class="term install" id="install">
+  <div class="term install">
     <div class="bar">
-      <div class="tabs" role="tablist" aria-label="Operating system">
-        <button type="button" role="tab" data-os="macos" aria-selected="true">macOS</button>
-        <button type="button" role="tab" data-os="linux" aria-selected="false">Linux</button>
-        <button type="button" role="tab" data-os="windows" aria-selected="false">Windows</button>
+      <div class="tabs" role="group" aria-label="Operating system">
+        <button type="button" data-os="macos" aria-pressed="true">macOS</button>
+        <button type="button" data-os="linux" aria-pressed="false">Linux</button>
+        <button type="button" data-os="windows" aria-pressed="false">Windows</button>
       </div>
     </div>
     <div class="cmd">
       <code><span class="p" id="install-prompt">$ </span><span id="install-cmd">curl -fsSL https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.sh | bash</span></code>
-      <button type="button" class="btn" data-copy aria-label="Copy the install command">Copy</button>
+      <button type="button" class="btn" id="copy">Copy</button>
     </div>
   </div>
-  <p class="note">Then <code>tg login</code>. <span id="install-note">Apple silicon and Intel.</span></p>
+  <p class="note"><span id="phone-note" hidden>Run it on your computer. </span>Then <a href="https://github.com/RealDoc06/tg-cli#install"><code>tg login</code></a>. <span id="install-note">Apple silicon and Intel.</span><noscript> On Windows, see the <a href="https://github.com/RealDoc06/tg-cli#install">README</a>.</noscript></p>
 </div>
 
-<div class="wrap">
+<figure class="wrap">
   <picture>
     <source media="(max-width: 40rem)" srcset="img/tui-list-phone.png" width="860" height="960">
     <img class="shot" src="img/tui.png" width="2360" height="1320" alt="The tg terminal client: a chat list with profile pictures on the left, the Homelab group conversation on the right, a message being typed at the bottom.">
   </picture>
-</div>
+  <img class="shot phone-only" src="img/tui-chat-phone.png" width="860" height="1100" loading="lazy" decoding="async" alt="The Homelab group conversation in a narrow terminal, with a message being typed.">
+  <figcaption>Run <code>tg</code> for the terminal client. Live messages, mouse support, profile pictures in Kitty and Ghostty.</figcaption>
+</figure>
 
 <section id="agents">
   <div class="wrap">
@@ -228,11 +231,11 @@ footer a:hover { color: var(--fg); }
 
     <div class="term" data-term>
       <div class="bar">
-        <div class="tabs" role="tablist" aria-label="Examples">
-          <button type="button" role="tab" data-pane="inbox" aria-selected="true">inbox</button>
-          <button type="button" role="tab" data-pane="json" aria-selected="false">json</button>
-          <button type="button" role="tab" data-pane="errors" aria-selected="false">errors</button>
-          <button type="button" role="tab" data-pane="guide" aria-selected="false">guide</button>
+        <div class="tabs" role="group" aria-label="Examples">
+          <button type="button" data-pane="inbox" aria-pressed="true">inbox</button>
+          <button type="button" data-pane="json" aria-pressed="false">json</button>
+          <button type="button" data-pane="errors" aria-pressed="false">errors</button>
+          <button type="button" data-pane="guide" aria-pressed="false">guide</button>
         </div>
         <button type="button" data-replay>replay</button>
       </div>
@@ -302,7 +305,6 @@ them, to real people, and cannot be taken back by this tool.
       <li>Plain text or <code>--json</code></li>
       <li>Errors name the next step</li>
       <li>Reading never marks as read</li>
-      <li>Linux, macOS, Windows</li>
     </ul>
   </div>
 </section>
@@ -314,7 +316,7 @@ them, to real people, and cannot be taken back by this tool.
       <ul class="checks">
         <li>Read-only mode</li>
         <li>A list of chats it may write to</li>
-        <li>Only a person at a terminal can lift a limit</li>
+        <li>Lifting a limit needs an interactive terminal</li>
       </ul>
     </div>
     <div class="term" data-term>
@@ -336,31 +338,6 @@ them, to real people, and cannot be taken back by this tool.
   </div>
 </section>
 
-<section id="terminal">
-  <div class="wrap">
-    <div class="head">
-      <h2>And a terminal client for you.</h2>
-      <p class="lead">Run <code>tg</code>. Live messages, mouse support, profile pictures in Kitty and Ghostty.</p>
-    </div>
-    <div class="pair">
-      <img class="shot wide-only" src="img/tui-list.png" width="1240" height="960" loading="lazy" decoding="async" alt="The chat list in a narrow terminal, with profile pictures, previews and unread counts.">
-      <picture>
-        <source media="(max-width: 40rem)" srcset="img/tui-chat-phone.png" width="860" height="1100">
-        <img class="shot" src="img/tui-chat.png" width="1240" height="960" loading="lazy" decoding="async" alt="A group conversation in a narrow terminal, with a message being typed.">
-      </picture>
-    </div>
-  </div>
-</section>
-
-<section>
-  <div class="wrap end">
-    <h2>One command to start.</h2>
-    <div class="actions">
-      <button type="button" class="btn" data-copy>Copy install command</button>
-      <a class="btn ghost" href="https://github.com/RealDoc06/tg-cli#readme">Read the docs</a>
-    </div>
-  </div>
-</section>
 </main>
 
 <footer>
@@ -383,8 +360,11 @@ const SYSTEMS = {
   windows: { prompt: '> ', command: `irm ${RAW}install.ps1 | iex`, note: 'PowerShell. In Git Bash, MSYS2 or WSL use the Linux command.' },
 };
 
+const platform = `${navigator.userAgentData?.platform ?? ''} ${navigator.platform ?? ''} ${navigator.userAgent}`;
+// tg does not run on phones: say so, and still preselect the nearest system.
+document.getElementById('phone-note').hidden = !/android|iphone|ipad|ipod/i.test(platform);
+
 function detectSystem() {
-  const platform = `${navigator.userAgentData?.platform ?? ''} ${navigator.platform ?? ''} ${navigator.userAgent}`;
   if (/mac|iphone|ipad|ipod/i.test(platform)) return 'macos';
   if (/windows|win32|win64/i.test(platform)) return 'windows';
   return 'linux';
@@ -402,7 +382,7 @@ function paintCommand(text) {
     if (program) { program = false; return paint('fn', token); }
     if (token.startsWith('"')) return paint('str', token);
     if (token.startsWith('-')) return paint('flag', token);
-    return escapeHtml(token);
+    return escapeHtml(token).replaceAll('/', '/<wbr>'); // a long URL wraps at its slashes
   }).join('');
 }
 
@@ -423,7 +403,7 @@ function paintOutput(text) {
 const systemTabs = [...document.querySelectorAll('[data-os]')];
 function selectSystem(name) {
   const system = SYSTEMS[name];
-  for (const tab of systemTabs) tab.setAttribute('aria-selected', String(tab.dataset.os === name));
+  for (const tab of systemTabs) tab.setAttribute('aria-pressed', String(tab.dataset.os === name));
   document.getElementById('install-prompt').textContent = system.prompt;
   document.getElementById('install-cmd').innerHTML = paintCommand(system.command);
   document.getElementById('install-note').textContent = system.note;
@@ -431,27 +411,25 @@ function selectSystem(name) {
 for (const tab of systemTabs) tab.addEventListener('click', () => selectSystem(tab.dataset.os));
 selectSystem(detectSystem());
 
-for (const button of document.querySelectorAll('[data-copy]')) {
-  const label = button.textContent;
-  let timer;
-  button.addEventListener('click', async () => {
-    const command = document.getElementById('install-cmd');
-    try {
-      await navigator.clipboard.writeText(command.textContent);
-      button.textContent = 'Copied';
-    } catch {
-      // No clipboard access (plain http, old webview): select it so one more gesture copies.
-      document.getElementById('install').scrollIntoView({ block: 'center' });
-      getSelection().selectAllChildren(command);
-      button.textContent = 'Selected';
-    }
-    clearTimeout(timer);
-    timer = setTimeout(() => { button.textContent = label; }, 1600);
-  });
-}
+const copyButton = document.getElementById('copy');
+let copyTimer;
+copyButton.addEventListener('click', async () => {
+  const command = document.getElementById('install-cmd');
+  try {
+    await navigator.clipboard.writeText(command.textContent);
+    copyButton.textContent = 'Copied';
+  } catch {
+    // No clipboard access (plain http, old webview): select it so one more gesture copies.
+    getSelection().selectAllChildren(command);
+    copyButton.textContent = 'Selected';
+  }
+  clearTimeout(copyTimer);
+  copyTimer = setTimeout(() => { copyButton.textContent = 'Copy'; }, 1600);
+});
 
-// Terminals: the markup holds the finished session. play() hides it and types
-// it back, commands key by key and output at once. Each run cancels the last.
+// Terminals: the markup holds the finished session. A terminal waits blank
+// ("idle") until it scrolls into view, then play() types it: commands key by
+// key, output at once. Each run cancels the last.
 for (const command of document.querySelectorAll('pre .c')) command.innerHTML = paintCommand(command.textContent);
 for (const output of document.querySelectorAll('pre .o')) output.innerHTML = paintOutput(output.textContent);
 
@@ -469,6 +447,7 @@ function textNodes(element) {
 
 function finish(pane) {
   runs.set(pane, (runs.get(pane) ?? 0) + 1);
+  pane.classList.remove('idle');
   for (const segment of pane.children) segment.hidden = false;
   for (const node of textNodes(pane)) if (typed.has(node)) node.data = typed.get(node);
   for (const comment of pane.querySelectorAll('.k')) comment.hidden = false;
@@ -518,12 +497,12 @@ async function play(pane) {
 
 for (const term of document.querySelectorAll('[data-term]')) {
   const panes = [...term.querySelectorAll('pre')];
-  const tabs = [...term.querySelectorAll('[data-pane][role="tab"]')];
+  const tabs = [...term.querySelectorAll('button[data-pane]')];
   const active = () => panes.find((pane) => !pane.hidden);
 
   for (const tab of tabs) {
     tab.addEventListener('click', () => {
-      for (const other of tabs) other.setAttribute('aria-selected', String(other === tab));
+      for (const other of tabs) other.setAttribute('aria-pressed', String(other === tab));
       for (const pane of panes) {
         finish(pane);
         pane.hidden = pane.dataset.pane !== tab.dataset.pane;
@@ -533,11 +512,13 @@ for (const term of document.querySelectorAll('[data-term]')) {
   }
   term.querySelector('[data-replay]').addEventListener('click', () => play(active()));
 
+  if (still.matches) continue;
+  active().classList.add('idle');
   const observer = new IntersectionObserver((entries) => {
     if (!entries.some((entry) => entry.isIntersecting)) return;
     observer.disconnect();
     play(active());
-  }, { threshold: 0.4 });
+  }, { threshold: 0.25 });
   observer.observe(term);
 }
 </script>
