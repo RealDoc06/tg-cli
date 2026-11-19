@@ -156,15 +156,26 @@ func TestReadOnlyNeedsAPersonToLift(t *testing.T) {
 }
 
 func TestAllowlist(t *testing.T) {
+	// Starting a list narrows an open account, so an agent may do it.
+	// Growing the list is what needs a person.
 	atTerminal(t, false)
-	if err := run(t, "config", "allow", "alice"); !refused(err) {
-		t.Fatalf("allowing a chat without a terminal: %v", err)
+	if err := run(t, "config", "allow", "alice"); err != nil {
+		t.Fatalf("starting an allowlist without a terminal: %v", err)
+	}
+	if err := run(t, "config", "allow", "-202"); !refused(err) {
+		t.Fatalf("growing the allowlist without a terminal: %v", err)
+	}
+	if err := run(t, "config", "allow", "--any"); !refused(err) {
+		t.Fatalf("dropping the allowlist without a terminal: %v", err)
 	}
 	atTerminal(t, true)
-	if err := run(t, "config", "allow", "alice", "-202"); err != nil {
+	if err := run(t, "config", "allow", "-202", "@bobchen"); err != nil {
 		t.Fatal(err)
 	}
 	atTerminal(t, false)
+	if err := run(t, "config", "disallow", "@bobchen"); err != nil {
+		t.Errorf("removing a chat by username: %v", err)
+	}
 
 	if err := run(t, "send", "alice", "hi"); err != nil {
 		t.Errorf("sending to a listed chat: %v", err)
@@ -244,9 +255,12 @@ func TestAccounts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	listed, err := output(t, "accounts", "--json")
-	if err != nil || strings.Count(listed, "\n") != 2 || !strings.Contains(listed, `"account":"default","default":true`) {
-		t.Fatalf("accounts after two logins: %q, %v", listed, err)
+	// The mark shows the configured default, whatever this one call acts as.
+	for _, args := range [][]string{{"accounts", "--json"}, {"accounts", "--json", "--account", "work"}} {
+		listed, err := output(t, args...)
+		if err != nil || strings.Count(listed, "\n") != 2 || !strings.Contains(listed, `"account":"default","default":true`) {
+			t.Fatalf("tg %s: %q, %v", strings.Join(args, " "), listed, err)
+		}
 	}
 
 	// Guardrails belong to one account.
@@ -279,10 +293,37 @@ func TestAccounts(t *testing.T) {
 		t.Errorf("the default account did not change: %v", err)
 	}
 
+	// Removing an account drops its guardrails with it: not for agents.
+	atTerminal(t, false)
+	for _, args := range [][]string{{"accounts", "remove", "work"}, {"logout"}} {
+		if err := run(t, args...); !refused(err) {
+			t.Errorf("tg %s without a terminal: %v", strings.Join(args, " "), err)
+		}
+	}
+	atTerminal(t, true)
 	if err := run(t, "accounts", "remove", "work"); err != nil {
 		t.Fatal(err)
 	}
 	if cfg, _ := config.Load(); cfg.Account != "default" || cfg.Accounts["work"] != nil {
 		t.Errorf("after removing the default account: %+v", cfg)
+	}
+}
+
+// Login flags carry the code and the password. They must stay out of the
+// log wherever the command sits on the line.
+func TestLoginArgumentsAreNotLogged(t *testing.T) {
+	t.Setenv("TG_CLI_HOME", t.TempDir())
+	t.Setenv("TG_DEMO", "")
+	a := &app{version: "dev"}
+	args := []string{"--json", "login", "--code", "13579", "--password", "hunter2"}
+	_ = a.dispatch(context.Background(), []string{"--json", "login", "--help"})
+	logInvocation("default", a.ran, args, time.Now(), 0, nil)
+
+	logged, err := os.ReadFile(config.Path("log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logged), "13579") || strings.Contains(string(logged), "hunter2") || !strings.Contains(string(logged), `"login"`) {
+		t.Errorf("log holds: %s", logged)
 	}
 }

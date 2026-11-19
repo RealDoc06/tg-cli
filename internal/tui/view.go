@@ -282,12 +282,14 @@ func (m *model) statusLine() string {
 	case focusFilter:
 		hints = "type to filter  enter open  esc clear"
 	}
+	// An error takes the whole line: it is usually longer than what is left
+	// next to the hints, and matters more than them.
+	if m.status != "" {
+		return fit(" "+errSty.Render(m.status), m.width)
+	}
 	right := dim.Render("tg " + m.version)
 	if m.account != "" {
 		right = accent.Render(m.account) + "  " + right
-	}
-	if m.status != "" {
-		right = errSty.Render(m.status)
 	}
 	return spread(" "+dim.Render(hints), right+" ", m.width)
 }

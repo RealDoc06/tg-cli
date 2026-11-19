@@ -102,7 +102,9 @@ func newClient(opts Options) (*telegram.Client, *updates.Manager, tg.UpdateDispa
 
 	var gaps *updates.Manager
 	if opts.Updates {
-		gaps = updates.New(updates.Config{Handler: dispatcher})
+		// Updates that arrive before Watch runs are held back and replayed
+		// after its EventReady, never handed out ahead of it.
+		gaps = updates.New(updates.Config{Handler: dispatcher, BeforeRun: updates.BeforeRunBuffer})
 		tgOpts.UpdateHandler = gaps
 		// Feed the results of our own requests to the manager too, so a sent
 		// message does not look like a gap in the update sequence.

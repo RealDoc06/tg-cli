@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"time"
 )
 
 // DefaultAPIID and DefaultAPIHash can be baked into release builds with
@@ -30,7 +31,9 @@ var ErrNoCredentials = errors.New("no Telegram API credentials, run `tg login`")
 // DefaultAccount is the name of the account created by a plain `tg login`.
 const DefaultAccount = "default"
 
-// Dir is where tg keeps everything. TG_CLI_HOME overrides it.
+// Dir is where tg keeps everything. TG_CLI_HOME overrides it. The demo gets
+// a directory of its own, so that trying things out with TG_DEMO=1 can never
+// touch the accounts and guardrails of the real one.
 func Dir() string {
 	if home := os.Getenv("TG_CLI_HOME"); home != "" {
 		return home
@@ -38,6 +41,9 @@ func Dir() string {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		base = "."
+	}
+	if os.Getenv("TG_DEMO") != "" {
+		return filepath.Join(base, "tg-cli-demo")
 	}
 	return filepath.Join(base, "tg-cli")
 }
@@ -132,8 +138,16 @@ func (f *File) Save() error {
 	return writeFile(FilePath(), append(data, '\n'))
 }
 
-// Update applies change to the configuration as it is on disk right now.
+// Update applies change to the configuration as it is on disk right now. A
+// lock file makes the read, change and write one step across tg processes:
+// without it, a process holding an older copy could write a guardrail that
+// was just set back out of the file.
 func Update(change func(*File) error) error {
+	unlock, err := lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	f, err := Load()
 	if err != nil {
 		return err
@@ -144,15 +158,50 @@ func Update(change func(*File) error) error {
 	return f.Save()
 }
 
+// lock takes config.json.lock, waiting for another tg process to finish. A
+// lock older than staleLock was left by a process that died.
+func lock() (unlock func(), err error) {
+	const staleLock, patience = 10 * time.Second, 5 * time.Second
+	path := FilePath() + ".lock"
+	if err := os.MkdirAll(Dir(), 0o700); err != nil {
+		return nil, err
+	}
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			file.Close()
+			return func() { os.Remove(path) }, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > staleLock {
+			os.Remove(path)
+			continue
+		}
+		if time.Since(start) > patience {
+			return nil, fmt.Errorf("%s is held by another tg process, try again", path)
+		}
+	}
+}
+
+// Default is the account used when none is asked for.
+func (f *File) Default() string {
+	if f.Account != "" {
+		return f.Account
+	}
+	return DefaultAccount
+}
+
 // Active picks the account to act as: the one asked for on the command line,
 // else TG_ACCOUNT, else the configured one, else the default.
 func (f *File) Active(asked string) string {
-	for _, name := range []string{asked, os.Getenv("TG_ACCOUNT"), f.Account} {
+	for _, name := range []string{asked, os.Getenv("TG_ACCOUNT")} {
 		if name != "" {
 			return name
 		}
 	}
-	return DefaultAccount
+	return f.Default()
 }
 
 // Ensure returns the entry of an account, creating it if needed.
@@ -187,28 +236,33 @@ func CheckName(name string) error {
 }
 
 // Migrate moves the session of versions that knew a single account into the
-// default account. It does nothing once that is done.
+// default account. It does nothing once that is done. The account is
+// registered first, so a failure leaves the old file in place for a retry.
 func Migrate() error {
 	legacy := Path("session.json")
 	if _, err := os.Stat(legacy); err != nil {
 		return nil
 	}
 	dir := AccountDir(DefaultAccount)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	if _, err := os.Stat(filepath.Join(dir, "session.json")); err == nil {
+		return nil // never replace the session of an account that exists
 	}
-	if err := os.Rename(legacy, filepath.Join(dir, "session.json")); err != nil {
-		return err
-	}
-	// The peer cache can be rebuilt, losing it is not worth failing over.
-	_ = os.Rename(Path("peers.json"), filepath.Join(dir, "peers.json"))
-	return Update(func(f *File) error {
+	err := Update(func(f *File) error {
 		f.Ensure(DefaultAccount)
 		if f.Account == "" {
 			f.Account = DefaultAccount
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// The peer cache can be rebuilt, losing it is not worth failing over.
+	_ = os.Rename(Path("peers.json"), filepath.Join(dir, "peers.json"))
+	return os.Rename(legacy, filepath.Join(dir, "session.json"))
 }
 
 // Credentials identify the application to Telegram.

@@ -73,7 +73,7 @@ An agent with your session can write to anyone as you. Two limits keep that in c
 tg config                        # show the limits and where the file is
 tg config read-only on           # no sending, no marking as read, no new groups
 tg config allow "Dev Team" @bob  # from now on, write only to these chats
-tg config disallow @bob          # take one off the list
+tg config disallow @bob          # take one off the list (never the last one)
 tg config allow --any            # lift the list
 ```
 
@@ -94,7 +94,7 @@ They live in `config.json`, and the commands and the file are the same thing: ed
 - Only `id` counts in `send_to`, the title is for you. An empty list means any chat.
 - The file is re-read on every write, so a change applies at once, even to a TUI that is already open.
 - A misspelled key stops tg with an error instead of being ignored.
-- Loosening a limit (`read-only off`, `allow`, `accounts use`) only works for a person at a terminal. An agent running it is refused, so a message cannot talk it out of its limits. Tightening works from anywhere.
+- Loosening a limit (`read-only off`, adding to a list or dropping it, `accounts use`, `logout`) only works for a person at a terminal. An agent running it is refused, so a message cannot talk it out of its limits. Tightening works from anywhere, including starting a list on an open account.
 - Reading is never limited, and an agent that can edit files can still edit `config.json`: this stops mistakes and injected instructions, not a determined process with your user's rights.
 
 ## Accounts
@@ -146,7 +146,7 @@ Set `TG_NO_AUTOUPDATE=1` to turn the background check off.
 | `TG_CLI_HOME` | Directory for everything tg stores |
 | `TG_ACCOUNT` | Account to act as, instead of the default one |
 | `TG_API_ID`, `TG_API_HASH` | Telegram API credentials, instead of the saved ones |
-| `TG_DEMO=1` | Run everything against built in sample chats, no account needed |
+| `TG_DEMO=1` | Run everything against built in sample chats, no account needed. Uses its own directory, never your real configuration |
 | `TG_IMAGES=0\|1` | Force profile pictures off or on |
 | `TG_NO_AUTOUPDATE=1` | Disable background updates |
 | `TG_NO_LOG=1` | Do not record commands in `log.jsonl` |

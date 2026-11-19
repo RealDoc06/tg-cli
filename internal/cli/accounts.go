@@ -22,14 +22,14 @@ var interactive = func() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// needPerson refuses to loosen guardrails for a caller that is not a person
-// at a terminal. Otherwise an agent told to by a message it read could lift
-// its own restrictions with one command.
+// needPerson refuses to loosen guardrails, or to remove an account, for a
+// caller that is not a person at a terminal. Otherwise an agent told to by a
+// message it read could lift its own restrictions with one command.
 func needPerson(what string) error {
 	if interactive() {
 		return nil
 	}
-	return &core.RefusedError{Reason: what + " loosens the guardrails, so a person has to run it in a terminal. If you are an agent, ask your user"}
+	return &core.RefusedError{Reason: what + " has to be done by a person at a terminal, it is not for agents. If you are one, ask your user"}
 }
 
 // loadPolicy reads the guardrails of an account from config.json.
@@ -118,8 +118,12 @@ Any command takes --account <name> to act as another account once.`
 	return c
 }
 
-// logout ends an account's session and removes it from the configuration.
+// logout ends an account's session and removes it, guardrails included, from
+// the configuration.
 func (a *app) logout(ctx context.Context, name string) error {
+	if err := needPerson("logging out"); err != nil {
+		return err
+	}
 	if os.Getenv("TG_DEMO") == "" {
 		err := mtp.Logout(ctx, mtp.Options{Account: name, Version: a.version})
 		if err != nil && !errors.Is(err, core.ErrNotLoggedIn) {
@@ -144,10 +148,11 @@ func (a *app) logout(ctx context.Context, name string) error {
 }
 
 func (a *app) printAccounts() error {
-	current, cfg, err := a.active()
+	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	current := cfg.Default()
 	if a.json {
 		for _, name := range cfg.Names() {
 			entry := cfg.Accounts[name]
@@ -198,7 +203,8 @@ the same thing.
   tg config allow --any         drop the list, any chat can be written to
 
 Guardrails apply to every write: sending, marking as read, creating groups.
-Reading is never limited. Making them looser needs a person at a terminal.`
+Reading is never limited. Making them looser needs a person at a terminal:
+turning read-only off, adding to a list or dropping it. Tightening does not.`
 	lift := c.flags.Bool("any", false, "with allow: lift the limit, any chat can be written to")
 	c.run = func(ctx context.Context, args []string) error {
 		account, _, err := a.active()
@@ -219,9 +225,6 @@ Reading is never limited. Making them looser needs a person at a terminal.`
 			err = config.Update(func(f *config.File) error { f.Ensure(account).ReadOnly = on; return nil })
 
 		case args[0] == "allow" && (*lift != (len(args) > 1)):
-			if err := needPerson("allowing more chats"); err != nil {
-				return err
-			}
 			var chats []config.Chat
 			if !*lift {
 				if chats, err = a.resolveAll(ctx, args[1:]); err != nil {
@@ -230,6 +233,13 @@ Reading is never limited. Making them looser needs a person at a terminal.`
 			}
 			err = config.Update(func(f *config.File) error {
 				entry := f.Ensure(account)
+				// Starting a list narrows an open account. Adding to one,
+				// or dropping it, widens what can be written to.
+				if len(entry.SendTo) > 0 || *lift {
+					if err := needPerson("allowing more chats"); err != nil {
+						return err
+					}
+				}
 				if *lift {
 					entry.SendTo = nil
 				}
@@ -242,7 +252,11 @@ Reading is never limited. Making them looser needs a person at a terminal.`
 			})
 
 		case args[0] == "disallow" && len(args) > 1:
-			err = config.Update(func(f *config.File) error { return disallow(f.Ensure(account), args[1:]) })
+			var ids []int64
+			if ids, err = a.listedIDs(ctx, account, args[1:]); err != nil {
+				return err
+			}
+			err = config.Update(func(f *config.File) error { return disallow(f.Ensure(account), ids) })
 
 		default:
 			return errUsage{errors.New("usage: tg config [read-only on|off] [allow|disallow <chat>...], see `tg config --help`")}
@@ -271,18 +285,46 @@ func (a *app) resolveAll(ctx context.Context, refs []string) ([]config.Chat, err
 	return chats, err
 }
 
-// disallow takes chats, given by ID or by the title stored with them, off an
-// account's allowlist. It never removes the last one: an empty list means no
-// limit, which would turn a tightening command into a loosening one.
-func disallow(entry *config.Account, refs []string) error {
-	left := slices.Clone(entry.SendTo)
+// listedIDs turns the references given to `config disallow` into chat IDs.
+// IDs and the titles stored in the list need no connection, anything else
+// (a @username) is resolved like `config allow` does.
+func (a *app) listedIDs(ctx context.Context, account string, refs []string) ([]int64, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	var listed []config.Chat
+	if entry := cfg.Accounts[account]; entry != nil {
+		listed = entry.SendTo
+	}
+	ids := make([]int64, 0, len(refs))
 	for _, ref := range refs {
-		id, _ := strconv.ParseInt(ref, 10, 64)
-		i := slices.IndexFunc(left, func(c config.Chat) bool {
-			return c.ID == id || strings.EqualFold(c.Title, ref)
-		})
+		if id, err := strconv.ParseInt(ref, 10, 64); err == nil {
+			ids = append(ids, id)
+			continue
+		}
+		if i := slices.IndexFunc(listed, func(c config.Chat) bool { return strings.EqualFold(c.Title, ref) }); i >= 0 {
+			ids = append(ids, listed[i].ID)
+			continue
+		}
+		resolved, err := a.resolveAll(ctx, []string{ref})
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, resolved[0].ID)
+	}
+	return ids, nil
+}
+
+// disallow takes chats off an account's allowlist. It never removes the last
+// one: an empty list means no limit, which would turn a tightening command
+// into a loosening one.
+func disallow(entry *config.Account, ids []int64) error {
+	left := slices.Clone(entry.SendTo)
+	for _, id := range ids {
+		i := slices.IndexFunc(left, func(c config.Chat) bool { return c.ID == id })
 		if i < 0 {
-			return fmt.Errorf("%q is not on the list, see `tg config`", ref)
+			return fmt.Errorf("chat %d is not on the list, see `tg config`", id)
 		}
 		left = slices.Delete(left, i, i+1)
 	}

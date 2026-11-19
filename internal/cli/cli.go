@@ -37,6 +37,8 @@ type app struct {
 	json    bool
 	// account is the one asked for with --account, empty for the default.
 	account string
+	// ran is the command dispatch settled on, empty for the TUI and help.
+	ran string
 }
 
 // command is one subcommand. Its flags are parsed anywhere on the line, so
@@ -115,7 +117,7 @@ func Main(version string) int {
 	if name, _, activeErr := a.active(); activeErr == nil {
 		account = name
 	}
-	logInvocation(account, os.Args[1:], started, code, err)
+	logInvocation(account, a.ran, os.Args[1:], started, code, err)
 	if err != nil && code != 130 {
 		fmt.Fprintln(os.Stderr, "tg:", err)
 	}
@@ -194,6 +196,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return errUsage{fmt.Errorf("unknown command %q, see `tg guide`", name)}
 	}
 	cmd := commands[i]
+	a.ran = name
 	// Group and channel IDs are negative numbers. Shield them so they are
 	// read as arguments, not as flags.
 	rest := slices.Clone(args[1:])
@@ -227,6 +230,10 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	}
 	return cmd.run(ctx, positional)
 }
+
+// maxBacklog bounds what `watch --after` catches up on. Hitting it is an
+// error, never a silent cut.
+const maxBacklog = 1000
 
 var negativeID = regexp.MustCompile(`^-\d+$`)
 
@@ -404,7 +411,7 @@ when there are more than --limit.`
 			if err != nil {
 				return err
 			}
-			if chat != nil {
+			if chat != nil && !a.json {
 				for i := range msgs {
 					msgs[i].Chat = "" // the header already names the only chat
 				}
@@ -519,10 +526,13 @@ nothing is lost between sending or reading and starting to watch.`
 				if _, wanted := only[ev.Chat.ID]; (len(only) > 0 && !wanted) || ctx.Err() != nil {
 					return
 				}
-				if *after > 0 && ev.Kind == core.EventMessage {
-					if ev.Message.ID <= newest {
-						return // the backlog already covered it
-					}
+				switch {
+				case *after == 0:
+				case ev.Kind == core.EventEdit && ev.Message.ID <= *after:
+					return // an edit of something older is not what is awaited
+				case ev.Kind == core.EventMessage && ev.Message.ID <= newest:
+					return // the backlog already covered it
+				case ev.Kind == core.EventMessage:
 					newest = ev.Message.ID
 				}
 				if ev.Message.Out && !*outgoing {
@@ -537,7 +547,8 @@ nothing is lost between sending or reading and starting to watch.`
 					cancel()
 				}
 			}
-			return be.Watch(ctx, func(ev core.Event) {
+			var catchUpErr error
+			err := be.Watch(ctx, func(ev core.Event) {
 				if ev.Kind != core.EventReady {
 					show(ev)
 					return
@@ -548,15 +559,23 @@ nothing is lost between sending or reading and starting to watch.`
 					if *after == 0 {
 						break
 					}
-					backlog, err := be.History(ctx, chat.ID, core.HistoryQuery{AfterID: *after, Limit: 100})
+					backlog, err := be.History(ctx, chat.ID, core.HistoryQuery{AfterID: *after, Limit: maxBacklog})
+					if err == nil && len(backlog) == maxBacklog {
+						err = fmt.Errorf("more than %d messages are newer than %d, page through them with `tg read --after`", maxBacklog-1, *after)
+					}
 					if err != nil {
-						fmt.Fprintln(os.Stderr, "tg: could not load earlier messages:", err)
+						// Watching on would report later messages as if
+						// they were the first ones.
+						catchUpErr = fmt.Errorf("catching up after message %d: %w", *after, err)
+						cancel()
+						return
 					}
 					for _, m := range backlog {
 						show(core.Event{Kind: core.EventMessage, Chat: chat, Message: m})
 					}
 				}
 			})
+			return cmp.Or(catchUpErr, err)
 		})
 		// Running out of time is a normal way to stop, unless the caller was
 		// waiting for a number of messages that did not all arrive.

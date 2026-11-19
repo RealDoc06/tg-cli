@@ -27,12 +27,12 @@ type logEntry struct {
 // logInvocation appends a command to log.jsonl next to the session: a local
 // record of what was done to the account, most useful when the caller was an
 // agent. TG_NO_LOG=1 turns it off. Failing to log never fails the command.
-func logInvocation(account string, args []string, started time.Time, exit int, err error) {
+func logInvocation(account, command string, args []string, started time.Time, exit int, err error) {
 	if os.Getenv("TG_NO_LOG") != "" || os.Getenv("TG_DEMO") != "" || len(args) == 0 {
 		return
 	}
-	if args[0] == "login" {
-		args = args[:1] // its flags can carry the login code and password
+	if command == "login" {
+		args = []string{"login"} // its flags can carry the login code and password
 	}
 	entry := logEntry{
 		Time: started, Account: account, Args: args, Exit: exit, Ms: time.Since(started).Milliseconds(),
