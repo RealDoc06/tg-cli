@@ -39,6 +39,9 @@ type app struct {
 	account string
 	// ran is the command dispatch settled on, empty for the TUI and help.
 	ran string
+	// acting is the account this invocation acts as, resolved once so that
+	// every step of a command, and the log, mean the same account.
+	acting string
 }
 
 // command is one subcommand. Its flags are parsed anywhere on the line, so
@@ -113,11 +116,7 @@ func Main(version string) int {
 	started := time.Now()
 	err := a.dispatch(ctx, os.Args[1:])
 	code := exitCode(ctx, err)
-	account := ""
-	if name, _, activeErr := a.active(); activeErr == nil {
-		account = name
-	}
-	logInvocation(account, a.ran, os.Args[1:], started, code, err)
+	logInvocation(a.acting, a.ran, os.Args[1:], started, code, err)
 	if err != nil && code != 130 {
 		fmt.Fprintln(os.Stderr, "tg:", err)
 	}
@@ -157,6 +156,14 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return errUsage{err}
 	}
 	args = root.Args()
+	// Known before anything can fail, the log relies on it to keep login
+	// arguments out.
+	if len(args) > 0 {
+		a.ran = args[0]
+		if a.ran == "help" && len(args) > 1 {
+			a.ran = args[1]
+		}
+	}
 	if err := config.Migrate(); err != nil {
 		return err
 	}
@@ -196,7 +203,6 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return errUsage{fmt.Errorf("unknown command %q, see `tg guide`", name)}
 	}
 	cmd := commands[i]
-	a.ran = name
 	// Group and channel IDs are negative numbers. Shield them so they are
 	// read as arguments, not as flags.
 	rest := slices.Clone(args[1:])
@@ -246,11 +252,14 @@ func (a *app) active() (string, *config.File, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	name := cfg.Active(a.account)
-	if err := config.CheckName(name); err != nil {
-		return "", nil, errUsage{err}
+	if a.acting == "" {
+		name := cfg.Active(a.account)
+		if err := config.CheckName(name); err != nil {
+			return "", nil, errUsage{err}
+		}
+		a.acting = name
 	}
-	return name, cfg, nil
+	return a.acting, cfg, nil
 }
 
 // backend opens the active account on Telegram, or the demo data when
@@ -495,8 +504,8 @@ nothing is lost between sending or reading and starting to watch.`
 	after := c.flags.Int("after", 0, "first print what is already newer than this message ID (one chat only)")
 	outgoing := c.flags.Bool("outgoing", false, "also print messages sent from this account, by you or by anyone else using it")
 	c.run = func(ctx context.Context, args []string) error {
-		if *after > 0 && len(args) != 1 {
-			return errUsage{errors.New("--after needs exactly one chat")}
+		if *after < 0 || (*after > 0 && len(args) != 1) {
+			return errUsage{errors.New("--after takes a message ID and needs exactly one chat")}
 		}
 		if *timeout > 0 {
 			var cancel context.CancelFunc
@@ -506,6 +515,7 @@ nothing is lost between sending or reading and starting to watch.`
 		// skipped counts messages hidden for being sent from this account, so
 		// a wait that ran out can say why it saw nothing.
 		var seen, skipped atomic.Int64
+		var catchUpErr error
 		err := a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
@@ -547,8 +557,7 @@ nothing is lost between sending or reading and starting to watch.`
 					cancel()
 				}
 			}
-			var catchUpErr error
-			err := be.Watch(ctx, func(ev core.Event) {
+			return be.Watch(ctx, func(ev core.Event) {
 				if ev.Kind != core.EventReady {
 					show(ev)
 					return
@@ -575,8 +584,10 @@ nothing is lost between sending or reading and starting to watch.`
 					}
 				}
 			})
-			return cmp.Or(catchUpErr, err)
 		})
+		if catchUpErr != nil {
+			return catchUpErr // also when the timeout hit while catching up
+		}
 		// Running out of time is a normal way to stop, unless the caller was
 		// waiting for a number of messages that did not all arrive.
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {

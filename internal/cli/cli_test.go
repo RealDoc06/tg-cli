@@ -117,8 +117,10 @@ func TestWatchAfterCatchesUp(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "0 of 1") {
 		t.Errorf("waiting past the newest message: %v", err)
 	}
-	if err := run(t, "watch", "--after", "3"); !errors.As(err, new(errUsage)) {
-		t.Errorf("--after without a chat: %v", err)
+	for _, args := range [][]string{{"watch", "--after", "3"}, {"watch", "--after=-1"}} {
+		if err := run(t, args...); !errors.As(err, new(errUsage)) {
+			t.Errorf("tg %s: %v", strings.Join(args, " "), err)
+		}
 	}
 }
 
@@ -314,16 +316,31 @@ func TestAccounts(t *testing.T) {
 func TestLoginArgumentsAreNotLogged(t *testing.T) {
 	t.Setenv("TG_CLI_HOME", t.TempDir())
 	t.Setenv("TG_DEMO", "")
-	a := &app{version: "dev"}
-	args := []string{"--json", "login", "--code", "13579", "--password", "hunter2"}
-	_ = a.dispatch(context.Background(), []string{"--json", "login", "--help"})
-	logInvocation("default", a.ran, args, time.Now(), 0, nil)
+	// A configuration that cannot be read makes dispatch fail early, and a
+	// bad flag before the command keeps it from being recognized at all.
+	if err := os.WriteFile(config.FilePath(), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.Path("session.json"), []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"--json", "login", "--code", "13579", "--password", "hunter2"},
+		{"--bogus", "login", "--code", "13579", "--password", "hunter2"},
+	} {
+		a := &app{version: "dev"}
+		err := a.dispatch(context.Background(), args)
+		if err == nil {
+			t.Fatalf("tg %s was expected to fail", strings.Join(args, " "))
+		}
+		logInvocation(a.acting, a.ran, args, time.Now(), 1, errors.New("failed with --password hunter2"))
+	}
 
 	logged, err := os.ReadFile(config.Path("log.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(logged), "13579") || strings.Contains(string(logged), "hunter2") || !strings.Contains(string(logged), `"login"`) {
+	if strings.Contains(string(logged), "13579") || strings.Contains(string(logged), "hunter2") || strings.Count(string(logged), `["login"]`) != 2 {
 		t.Errorf("log holds: %s", logged)
 	}
 }

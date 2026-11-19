@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
-	"time"
 )
 
 // DefaultAPIID and DefaultAPIHash can be baked into release builds with
@@ -139,7 +138,7 @@ func (f *File) Save() error {
 }
 
 // Update applies change to the configuration as it is on disk right now. A
-// lock file makes the read, change and write one step across tg processes:
+// file lock makes the read, change and write one step across tg processes:
 // without it, a process holding an older copy could write a guardrail that
 // was just set back out of the file.
 func Update(change func(*File) error) error {
@@ -158,31 +157,23 @@ func Update(change func(*File) error) error {
 	return f.Save()
 }
 
-// lock takes config.json.lock, waiting for another tg process to finish. A
-// lock older than staleLock was left by a process that died.
+// lock takes an exclusive lock on config.json.lock, waiting for another tg
+// process to finish. The operating system holds the lock and drops it when
+// the process ends, however it ends, so it can neither go stale nor be
+// taken from a slow writer.
 func lock() (unlock func(), err error) {
-	const staleLock, patience = 10 * time.Second, 5 * time.Second
-	path := FilePath() + ".lock"
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return nil, err
 	}
-	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			file.Close()
-			return func() { os.Remove(path) }, nil
-		}
-		if !os.IsExist(err) {
-			return nil, err
-		}
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > staleLock {
-			os.Remove(path)
-			continue
-		}
-		if time.Since(start) > patience {
-			return nil, fmt.Errorf("%s is held by another tg process, try again", path)
-		}
+	file, err := os.OpenFile(FilePath()+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
 	}
+	if err := lockFile(file); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return func() { file.Close() }, nil
 }
 
 // Default is the account used when none is asked for.
@@ -236,33 +227,39 @@ func CheckName(name string) error {
 }
 
 // Migrate moves the session of versions that knew a single account into the
-// default account. It does nothing once that is done. The account is
-// registered first, so a failure leaves the old file in place for a retry.
+// default account. It does nothing once that is done. It runs under the
+// configuration lock, so two tg processes starting together do it once.
 func Migrate() error {
 	legacy := Path("session.json")
 	if _, err := os.Stat(legacy); err != nil {
 		return nil
 	}
-	dir := AccountDir(DefaultAccount)
-	if _, err := os.Stat(filepath.Join(dir, "session.json")); err == nil {
-		return nil // never replace the session of an account that exists
-	}
-	err := Update(func(f *File) error {
+	return Update(func(f *File) error {
+		if _, err := os.Stat(legacy); err != nil {
+			return nil // another process got here first
+		}
+		dir := AccountDir(DefaultAccount)
+		session := filepath.Join(dir, "session.json")
+		if _, err := os.Stat(session); err == nil {
+			// The account has a session already. Set the old one aside for
+			// good: left in place, it would come back as a fresh account,
+			// without guardrails, the day this one is removed.
+			return os.Rename(legacy, legacy+".old")
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		// The peer cache can be rebuilt, losing it is not worth failing over.
+		_ = os.Rename(Path("peers.json"), filepath.Join(dir, "peers.json"))
+		if err := os.Rename(legacy, session); err != nil {
+			return err
+		}
 		f.Ensure(DefaultAccount)
 		if f.Account == "" {
 			f.Account = DefaultAccount
 		}
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	// The peer cache can be rebuilt, losing it is not worth failing over.
-	_ = os.Rename(Path("peers.json"), filepath.Join(dir, "peers.json"))
-	return os.Rename(legacy, filepath.Join(dir, "session.json"))
 }
 
 // Credentials identify the application to Telegram.

@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"time"
 
 	"golang.org/x/term"
@@ -31,8 +32,11 @@ func logInvocation(account, command string, args []string, started time.Time, ex
 	if os.Getenv("TG_NO_LOG") != "" || os.Getenv("TG_DEMO") != "" || len(args) == 0 {
 		return
 	}
-	if command == "login" {
-		args = []string{"login"} // its flags can carry the login code and password
+	// Login flags carry the code and the password. When the command could
+	// not even be told (a bad flag before it), err on the side of silence.
+	login := command == "login" || (command == "" && slices.Contains(args, "login"))
+	if login {
+		args, err = []string{"login"}, nil
 	}
 	entry := logEntry{
 		Time: started, Account: account, Args: args, Exit: exit, Ms: time.Since(started).Milliseconds(),

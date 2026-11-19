@@ -116,9 +116,6 @@ func TestUpdatesDoNotOverwriteEachOther(t *testing.T) {
 	if len(cfg.Accounts) != writers {
 		t.Errorf("%d of %d changes survived", len(cfg.Accounts), writers)
 	}
-	if _, err := os.Stat(FilePath() + ".lock"); !os.IsNotExist(err) {
-		t.Error("the lock file was left behind")
-	}
 }
 
 // Trying the demo must never touch the real accounts and guardrails.
@@ -129,5 +126,36 @@ func TestDemoHasItsOwnDirectory(t *testing.T) {
 	t.Setenv("TG_DEMO", "1")
 	if demo := Dir(); demo == normal {
 		t.Errorf("the demo uses %s", demo)
+	}
+}
+
+// A leftover old session next to a migrated account must not come back as a
+// fresh, unguarded account once that account is removed.
+func TestMigrateSetsAsideADuplicateSession(t *testing.T) {
+	t.Setenv("TG_CLI_HOME", t.TempDir())
+	dir := AccountDir(DefaultAccount)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{Path("session.json"): "old", filepath.Join(dir, "session.json"): "current"} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if current, _ := os.ReadFile(filepath.Join(dir, "session.json")); string(current) != "current" {
+		t.Errorf("the account's session was replaced with %q", current)
+	}
+
+	if err := os.RemoveAll(dir); err != nil { // the account is logged out
+		t.Fatal(err)
+	}
+	if err := Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "session.json")); !os.IsNotExist(err) {
+		t.Error("the old session came back as the default account")
 	}
 }
