@@ -454,6 +454,11 @@ func (b *backend) Download(ctx context.Context, chatID int64, msgID int, dir str
 		return "", err
 	}
 	path := filepath.Join(dir, name)
+	// The name is chosen by whoever sent the file: it must never be able to
+	// replace a file that is already there.
+	if _, err := os.Stat(path); err == nil {
+		return "", fmt.Errorf("%s already exists, pick another directory with -o", path)
+	}
 	_, err = b.client.Download(location).ToPath(ctx, path)
 	return path, err
 }

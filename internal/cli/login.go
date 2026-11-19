@@ -101,6 +101,12 @@ and tg will ask for them here.`
 			// lets the account commands be tried.
 			return a.loggedIn(account, demo.New().Self())
 		}
+		// A login creates a session with no guardrails. Left to agents, one
+		// could read the login code Telegram sends to the account's own
+		// chats and mint itself an unrestricted account.
+		if err := needPerson("logging in"); err != nil {
+			return err
+		}
 		if *apiID != "" || *apiHash != "" {
 			// Parsed here rather than by the flag, so a hash pasted in the
 			// wrong place is not echoed back in an error message.
@@ -144,11 +150,13 @@ and tg will ask for them here.`
 func (a *app) loggedIn(account string, user core.User) error {
 	var current string
 	err := config.Update(func(f *config.File) error {
-		f.Ensure(account).User = &config.User{ID: user.ID, Name: user.Name, Username: user.Username}
-		if f.Account == "" {
+		// Only the very first account becomes the default. A file that
+		// names none already has one: "default".
+		if len(f.Accounts) == 0 && f.Account == "" {
 			f.Account = account
 		}
-		current = f.Account
+		f.Ensure(account).User = &config.User{ID: user.ID, Name: user.Name, Username: user.Username}
+		current = f.Default()
 		return nil
 	})
 	if err != nil {

@@ -11,12 +11,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -175,8 +175,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	case *help || (len(args) == 1 && args[0] == "help"):
 		fmt.Print(rootHelp(commands))
 		return nil
-	case len(args) == 1 && args[0] == "guide":
-		fmt.Print(guide)
+	case len(args) > 0 && args[0] == "guide":
+		fmt.Print(guide) // the same text whatever flags come with it
 		return nil
 	case len(args) == 0:
 		if !term.IsTerminal(int(os.Stdout.Fd())) {
@@ -235,6 +235,23 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		selfupdate.AutoCheck(a.version)
 	}
 	return cmd.run(ctx, positional)
+}
+
+// inside reports whether path is parent itself or lies under it, following
+// symbolic links where they exist.
+func inside(parent, path string) bool {
+	resolve := func(p string) string {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return p
+		}
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			return real
+		}
+		return abs
+	}
+	rel, err := filepath.Rel(resolve(parent), resolve(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // maxBacklog bounds what `watch --after` catches up on. Hitting it is an
@@ -474,6 +491,11 @@ func (a *app) downloadCmd() *command {
 		if err != nil {
 			return errUsage{fmt.Errorf("invalid message ID %q", args[1])}
 		}
+		// The file name comes from the chat. Saved next to config.json, a
+		// file with the right name would replace the guardrails.
+		if inside(config.Dir(), *dir) {
+			return &core.RefusedError{Reason: fmt.Sprintf("%s is where tg keeps its own files, download somewhere else", *dir)}
+		}
 		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
 			chat, err := be.Resolve(ctx, args[0])
 			if err != nil {
@@ -512,100 +534,127 @@ nothing is lost between sending or reading and starting to watch.`
 			ctx, cancel = context.WithTimeout(ctx, *timeout)
 			defer cancel()
 		}
-		// skipped counts messages hidden for being sent from this account, so
-		// a wait that ran out can say why it saw nothing.
-		var seen, skipped atomic.Int64
-		var catchUpErr error
+		opts := watchOptions{chats: args, count: *count, after: *after, outgoing: *outgoing}
+		var stats watchStats
 		err := a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			only := map[int64]core.Chat{}
-			for _, ref := range args {
-				chat, err := be.Resolve(ctx, ref)
-				if err != nil {
-					return err
-				}
-				only[chat.ID] = chat
-			}
-
-			var mu sync.Mutex
-			newest := *after // highest message ID handled so far, used with --after
-			show := func(ev core.Event) {
-				mu.Lock()
-				defer mu.Unlock()
-				if _, wanted := only[ev.Chat.ID]; (len(only) > 0 && !wanted) || ctx.Err() != nil {
-					return
-				}
-				switch {
-				case *after == 0:
-				case ev.Kind == core.EventEdit && ev.Message.ID <= *after:
-					return // an edit of something older is not what is awaited
-				case ev.Kind == core.EventMessage && ev.Message.ID <= newest:
-					return // the backlog already covered it
-				case ev.Kind == core.EventMessage:
-					newest = ev.Message.ID
-				}
-				if ev.Message.Out && !*outgoing {
-					skipped.Add(1)
-					return
-				}
-				if seen.Load() == 0 && !a.json {
-					fmt.Println(untrusted)
-				}
-				a.printEvent(ev, len(only) != 1)
-				if n := seen.Add(1); *count > 0 && n >= int64(*count) {
-					cancel()
-				}
-			}
-			err := be.Watch(ctx, func(ev core.Event) {
-				if ev.Kind != core.EventReady {
-					show(ev)
-					return
-				}
-				// The subscription is live and holds back new messages
-				// until this returns: the moment to catch up.
-				for _, chat := range only {
-					if *after == 0 {
-						break
-					}
-					backlog, err := be.History(ctx, chat.ID, core.HistoryQuery{AfterID: *after, Limit: maxBacklog})
-					if err == nil && len(backlog) == maxBacklog {
-						err = fmt.Errorf("more than %d messages are newer than %d, page through them with `tg read --after`", maxBacklog-1, *after)
-					}
-					if err != nil {
-						// Watching on would report later messages as if
-						// they were the first ones.
-						catchUpErr = fmt.Errorf("catching up after message %d: %w", *after, err)
-						cancel()
-						return
-					}
-					for _, m := range backlog {
-						show(core.Event{Kind: core.EventMessage, Chat: chat, Message: m})
-					}
-				}
-			})
-			// Returned from here so the backend words it like any other
-			// Telegram error.
-			return cmp.Or(catchUpErr, err)
+			var err error
+			stats, err = a.watch(ctx, be, opts)
+			return err
 		})
-		if catchUpErr != nil {
+		if stats.catchUpFailed {
 			return err // also when the timeout hit while catching up
 		}
 		// Running out of time is a normal way to stop, unless the caller was
 		// waiting for a number of messages that did not all arrive.
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			if n := seen.Load(); *count > 0 && n < int64(*count) {
+			if *count > 0 && stats.seen < *count {
 				hint := ""
-				if s := skipped.Load(); s > 0 {
-					hint = fmt.Sprintf("; skipped %d sent from this account, add --outgoing to see them (agents sharing the account all count as you)", s)
+				if stats.skipped > 0 {
+					hint = fmt.Sprintf("; skipped %d sent from this account, add --outgoing to see them (agents sharing the account all count as you)", stats.skipped)
 				}
-				return fmt.Errorf("timed out after %s with %d of %d messages%s", *timeout, n, *count, hint)
+				return fmt.Errorf("timed out after %s with %d of %d messages%s", *timeout, stats.seen, *count, hint)
 			}
 			return nil
 		}
 		return err
 	}
 	return c
+}
+
+type watchOptions struct {
+	chats    []string // references of the chats to watch, all chats when empty
+	count    int      // stop after this many messages, 0 for no limit
+	after    int      // catch up from this message ID first, 0 for live only
+	outgoing bool     // also show messages sent from this account
+}
+
+// watchStats is what a watch saw. skipped counts messages hidden for being
+// sent from this account, so a wait that ran out can say why it saw nothing.
+type watchStats struct {
+	seen, skipped int
+	catchUpFailed bool
+}
+
+// watch prints events from be until ctx ends or opts.count messages were
+// shown. With opts.after it first prints what is already newer than that
+// message, then goes live without repeating or reordering anything.
+func (a *app) watch(ctx context.Context, be core.Backend, opts watchOptions) (watchStats, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	only := map[int64]core.Chat{}
+	for _, ref := range opts.chats {
+		chat, err := be.Resolve(ctx, ref)
+		if err != nil {
+			return watchStats{}, err
+		}
+		only[chat.ID] = chat
+	}
+
+	var mu sync.Mutex
+	var stats watchStats
+	newest := opts.after // highest message ID handled so far, used with after
+	show := func(ev core.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, wanted := only[ev.Chat.ID]; (len(only) > 0 && !wanted) || ctx.Err() != nil {
+			return
+		}
+		switch {
+		case opts.after == 0:
+		case ev.Kind == core.EventEdit && ev.Message.ID <= opts.after:
+			return // an edit of something older is not what is awaited
+		case ev.Kind == core.EventMessage && ev.Message.ID <= newest:
+			return // the backlog already covered it
+		case ev.Kind == core.EventMessage:
+			newest = ev.Message.ID
+		}
+		if ev.Message.Out && !opts.outgoing {
+			stats.skipped++
+			return
+		}
+		if stats.seen == 0 && !a.json {
+			fmt.Println(untrusted)
+		}
+		a.printEvent(ev, len(only) != 1)
+		if stats.seen++; opts.count > 0 && stats.seen >= opts.count {
+			cancel()
+		}
+	}
+
+	var catchUpErr error
+	err := be.Watch(ctx, func(ev core.Event) {
+		if ev.Kind != core.EventReady {
+			show(ev)
+			return
+		}
+		// The subscription is live and holds back new messages until this
+		// returns: the moment to catch up.
+		for _, chat := range only {
+			if opts.after == 0 {
+				break
+			}
+			backlog, err := be.History(ctx, chat.ID, core.HistoryQuery{AfterID: opts.after, Limit: maxBacklog})
+			if err == nil && len(backlog) == maxBacklog {
+				err = fmt.Errorf("more than %d messages are newer than %d, page through them with `tg read --after`", maxBacklog-1, opts.after)
+			}
+			if err != nil {
+				// Watching on would report later messages as if they were
+				// the first ones.
+				catchUpErr = fmt.Errorf("catching up after message %d: %w", opts.after, err)
+				cancel()
+				return
+			}
+			for _, m := range backlog {
+				show(core.Event{Kind: core.EventMessage, Chat: chat, Message: m})
+			}
+		}
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	stats.catchUpFailed = catchUpErr != nil
+	// The catch-up error is returned from here so the backend words it like
+	// any other Telegram error.
+	return stats, cmp.Or(catchUpErr, err)
 }
 
 func (a *app) updateCmd() *command {

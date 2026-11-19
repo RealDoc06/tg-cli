@@ -31,6 +31,16 @@ func output(t *testing.T, args ...string) (string, error) {
 		t.Setenv("TG_NO_AUTOUPDATE", "1")
 		t.Setenv("TG_ACCOUNT", "")
 	}
+	var runErr error
+	printed := captured(t, func() {
+		runErr = (&app{version: "dev"}).dispatch(context.Background(), args)
+	})
+	return printed, runErr
+}
+
+// captured returns what fn printed to stdout.
+func captured(t *testing.T, fn func()) string {
+	t.Helper()
 	capture, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
 	if err != nil {
 		t.Fatal(err)
@@ -39,13 +49,24 @@ func output(t *testing.T, args ...string) (string, error) {
 	stdout := os.Stdout
 	os.Stdout = capture
 	defer func() { os.Stdout = stdout }()
-
-	runErr := (&app{version: "dev"}).dispatch(context.Background(), args)
+	fn()
 	printed, err := os.ReadFile(capture.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(printed), runErr
+	return string(printed)
+}
+
+// writeConfig puts content in config.json, the way a person with an editor
+// would.
+func writeConfig(t *testing.T, content string) {
+	t.Helper()
+	if err := os.MkdirAll(config.Dir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.FilePath(), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // atTerminal makes the commands believe a person is, or is not, typing.
@@ -214,9 +235,7 @@ func TestConfigFileAndCommandsAgree(t *testing.T) {
 		t.Fatal(err)
 	}
 	byHand := `{"api_id": 7, "api_hash": "h", "accounts": {"default": {"read_only": false, "send_to": [{"id": 101}]}}}`
-	if err := os.WriteFile(config.FilePath(), []byte(byHand), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, byHand)
 
 	if err := run(t, "send", "@bobchen", "hi"); !refused(err) {
 		t.Errorf("a hand written allowlist is not enforced: %v", err)
@@ -242,9 +261,7 @@ func TestConfigFileAndCommandsAgree(t *testing.T) {
 	}
 
 	// A misspelled guardrail must stop everything rather than be ignored.
-	if err := os.WriteFile(config.FilePath(), []byte(`{"accounts": {"default": {"readonly": true}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, `{"accounts": {"default": {"readonly": true}}}`)
 	if err := run(t, "send", "alice", "hi"); err == nil || !strings.Contains(err.Error(), "readonly") {
 		t.Errorf("a misspelled key was accepted: %v", err)
 	}
@@ -318,9 +335,7 @@ func TestLoginArgumentsAreNotLogged(t *testing.T) {
 	t.Setenv("TG_DEMO", "")
 	// A configuration that cannot be read makes dispatch fail early, and a
 	// bad flag before the command keeps it from being recognized at all.
-	if err := os.WriteFile(config.FilePath(), []byte("{broken"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, "{broken")
 	if err := os.WriteFile(config.Path("session.json"), []byte("key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -342,5 +357,113 @@ func TestLoginArgumentsAreNotLogged(t *testing.T) {
 	}
 	if strings.Contains(string(logged), "13579") || strings.Contains(string(logged), "hunter2") || strings.Count(string(logged), `["login"]`) != 2 {
 		t.Errorf("log holds: %s", logged)
+	}
+}
+
+// scripted is a backend that replays a fixed conversation to a watcher.
+type scripted struct {
+	core.Backend
+	backlog []core.Message
+	live    []core.Event
+}
+
+func (s scripted) Resolve(context.Context, string) (core.Chat, error) {
+	return core.Chat{ID: 1, Title: "Team"}, nil
+}
+
+func (s scripted) History(context.Context, int64, core.HistoryQuery) ([]core.Message, error) {
+	return s.backlog, nil
+}
+
+func (s scripted) Watch(ctx context.Context, fn func(core.Event)) error {
+	fn(core.Event{Kind: core.EventReady})
+	for _, ev := range s.live {
+		fn(ev)
+	}
+	<-ctx.Done()
+	return nil
+}
+
+// Between the backlog and the live stream nothing may be printed twice, out
+// of order, or counted when it is not a new message.
+func TestWatchJoinsBacklogAndLiveStream(t *testing.T) {
+	chat := core.Chat{ID: 1, Title: "Team"}
+	msg := func(id int, text string) core.Message {
+		return core.Message{ID: id, ChatID: 1, From: "Ann", Text: text, Date: time.Unix(0, 0)}
+	}
+	be := scripted{
+		backlog: []core.Message{msg(4, "four"), msg(5, "five")},
+		live: []core.Event{
+			{Kind: core.EventMessage, Chat: chat, Message: msg(5, "five")},     // also in the backlog
+			{Kind: core.EventEdit, Chat: chat, Message: msg(2, "two, edited")}, // older than the cursor
+			{Kind: core.EventMessage, Chat: core.Chat{ID: 9}, Message: msg(8, "elsewhere")},
+			{Kind: core.EventMessage, Chat: chat, Message: msg(6, "six")},
+			{Kind: core.EventMessage, Chat: chat, Message: msg(7, "seven")}, // past --count
+		},
+	}
+
+	var stats watchStats
+	var err error
+	printed := captured(t, func() {
+		stats, err = (&app{}).watch(context.Background(), be, watchOptions{chats: []string{"team"}, after: 3, count: 3})
+	})
+	if err != nil || stats.seen != 3 {
+		t.Fatalf("watch saw %d messages: %v", stats.seen, err)
+	}
+	var texts []string
+	for _, line := range strings.Split(strings.TrimSpace(printed), "\n")[1:] { // after the data marker
+		texts = append(texts, line[strings.LastIndex(line, ": ")+2:])
+	}
+	if got := strings.Join(texts, ","); got != "four,five,six" {
+		t.Errorf("printed %q, want four,five,six", got)
+	}
+}
+
+// A file sent to a chat is named by its sender. Downloading it must not be
+// a way to replace tg's own files, the guardrails among them.
+func TestDownloadCannotTargetTheStateDirectory(t *testing.T) {
+	if err := run(t, "config"); err != nil { // sets up the home directory
+		t.Fatal(err)
+	}
+	for _, dir := range []string{config.Dir(), filepath.Join(config.Dir(), "accounts", "default")} {
+		if err := run(t, "download", "alice", "5", "-o", dir); !refused(err) {
+			t.Errorf("downloading into %s: %v", dir, err)
+		}
+	}
+	if err := run(t, "download", "alice", "5", "-o", t.TempDir()); err != nil {
+		t.Errorf("downloading elsewhere: %v", err)
+	}
+}
+
+// A new session has no guardrails, and the login code is readable in the
+// account's own chats: an agent must not be able to log in.
+func TestLoginNeedsATerminal(t *testing.T) {
+	t.Setenv("TG_CLI_HOME", t.TempDir())
+	t.Setenv("TG_DEMO", "")
+	t.Setenv("TG_API_ID", "1")
+	t.Setenv("TG_API_HASH", "h")
+	atTerminal(t, false)
+	err := (&app{version: "dev"}).dispatch(context.Background(), []string{"login", "--account", "extra", "--phone", "+15550100"})
+	if !refused(err) {
+		t.Fatalf("logging in without a terminal: %v", err)
+	}
+}
+
+// Adding an account must not change which one the others act as, also when
+// the file was written by hand and names no default.
+func TestLoginKeepsTheDefaultAccount(t *testing.T) {
+	atTerminal(t, true)
+	if err := run(t, "config"); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, `{"accounts": {"default": {"read_only": true, "send_to": []}}}`)
+	if err := run(t, "login", "--account", "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t, "send", "alice", "hi"); !refused(err) {
+		t.Errorf("the default moved away from the read-only account: %v", err)
+	}
+	if err := run(t, "config", "read-only", "on", "--account", "tpyo"); err == nil {
+		t.Error("a guardrail was set on an account that does not exist")
 	}
 }

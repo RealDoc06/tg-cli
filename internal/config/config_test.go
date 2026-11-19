@@ -127,6 +127,32 @@ func TestDemoHasItsOwnDirectory(t *testing.T) {
 	if demo := Dir(); demo == normal {
 		t.Errorf("the demo uses %s", demo)
 	}
+	// Also when the directory was chosen with TG_CLI_HOME.
+	home := t.TempDir()
+	t.Setenv("TG_CLI_HOME", home)
+	if demo := Dir(); demo == home {
+		t.Errorf("the demo uses %s", demo)
+	}
+}
+
+// What a person can get wrong when editing the file must be an error, not a
+// crash or a silently ignored setting.
+func TestLoadRejectsBrokenHandEdits(t *testing.T) {
+	t.Setenv("TG_CLI_HOME", t.TempDir())
+	t.Setenv("TG_DEMO", "")
+	for name, content := range map[string]string{
+		"a misspelled key":       `{"accounts": {"default": {"readonly": true}}}`,
+		"text after the object":  `{"account": "default"} {"account": "other"}`,
+		"a null account":         `{"accounts": {"default": null}}`,
+		"an unfinished document": `{"accounts": {`,
+	} {
+		if err := os.WriteFile(FilePath(), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
 }
 
 // A leftover old session next to a migrated account must not come back as a
@@ -147,6 +173,17 @@ func TestMigrateSetsAsideADuplicateSession(t *testing.T) {
 	}
 	if current, _ := os.ReadFile(filepath.Join(dir, "session.json")); string(current) != "current" {
 		t.Errorf("the account's session was replaced with %q", current)
+	}
+
+	// A second leftover must not replace the first one set aside.
+	if err := os.WriteFile(Path("session.json"), []byte("older"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if first, _ := os.ReadFile(Path("session.json.old")); string(first) != "old" {
+		t.Errorf("the first session set aside now holds %q", first)
 	}
 
 	if err := os.RemoveAll(dir); err != nil { // the account is logged out

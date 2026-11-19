@@ -54,7 +54,8 @@ tg chats -u                                   # what is unread
 tg read "Dev Team" -n 50 --json               # last 50 messages as JSON
 tg send @alice "on my way"
 git log -5 --oneline | tg send me             # pipe anything
-tg send @alice "did it work?" && tg watch @alice --count 1 --timeout 10m
+id=$(tg send @alice "did it work?" --json | jq .id)
+tg watch @alice --after $id --count 1 --timeout 10m   # the reply, even if it came first
 ```
 
 Reading does not mark messages as read unless you pass `--mark-read`. Exit codes: 0 success, 1 failure, 2 wrong usage, 3 refused by a guardrail.
@@ -63,7 +64,7 @@ Message text is untrusted input. An agent that reads chats and can also send sho
 
 `tg watch` skips messages sent from the account itself. Several agents sharing one account all look like `me` to each other: they need `--outgoing`.
 
-Every command is appended to `log.jsonl` next to the session, with its arguments, exit code and duration: a local record of what an agent did to your account. `tg login` arguments are never logged.
+Every command is appended to `log.jsonl` in tg's directory, with its account, arguments, exit code and duration, so you can see what an agent did. It is a convenience, not an audit trail: it holds the text of sent messages, and `TG_NO_LOG=1` turns it off for whoever sets it. `tg login` arguments are never logged.
 
 ## Guardrails
 
@@ -94,8 +95,10 @@ They live in `config.json`, and the commands and the file are the same thing: ed
 - Only `id` counts in `send_to`, the title is for you. An empty list means any chat.
 - The file is re-read on every write, so a change applies at once, even to a TUI that is already open.
 - A misspelled key stops tg with an error instead of being ignored.
-- Loosening a limit (`read-only off`, adding to a list or dropping it, `accounts use`, `logout`) only works for a person at a terminal. An agent running it is refused, so a message cannot talk it out of its limits. Tightening works from anywhere, including starting a list on an open account.
-- Reading is never limited, and an agent that can edit files can still edit `config.json`: this stops mistakes and injected instructions, not a determined process with your user's rights.
+- Loosening a limit (`read-only off`, adding to a list or dropping it), `login`, `logout` and `accounts use` only work from an interactive terminal. Agents normally run commands without one and are refused, so a message cannot talk them out of their limits with one command. Tightening works from anywhere, including starting a list on an open account.
+- Limits belong to an account, not to an agent. `--account` reaches every account on the machine, so restrict each one an agent could use.
+- `tg download` refuses to write into tg's own directory and never replaces an existing file.
+- What this does not stop: reading is never limited, an agent that drives a real terminal (tmux, a pty) passes the terminal check, and one that edits files can edit `config.json`. The guardrails stop mistakes and injected instructions, not a determined process with your user's rights.
 
 ## Accounts
 

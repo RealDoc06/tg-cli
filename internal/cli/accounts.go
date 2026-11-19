@@ -17,14 +17,17 @@ import (
 	"github.com/RealDoc06/tg-cli/internal/mtp"
 )
 
-// interactive reports whether a person is at the terminal. Tests replace it.
+// interactive reports whether tg is run from a terminal, which is as close
+// as it can get to knowing a person is there. An agent that drives a real
+// terminal passes: the README says so. Tests replace it.
 var interactive = func() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// needPerson refuses to loosen guardrails, or to remove an account, for a
-// caller that is not a person at a terminal. Otherwise an agent told to by a
-// message it read could lift its own restrictions with one command.
+// needPerson refuses to loosen guardrails, to log in or to remove an account
+// when tg is not run from a terminal, which is how agents normally run it.
+// Otherwise one told to by a message it read could lift its own restrictions
+// with a single command.
 func needPerson(what string) error {
 	if interactive() {
 		return nil
@@ -57,9 +60,6 @@ func rememberUser(cfg *config.File, account string, self core.User) {
 	}
 	_ = config.Update(func(f *config.File) error {
 		f.Ensure(account).User = &user
-		if f.Account == "" {
-			f.Account = account
-		}
 		return nil
 	})
 }
@@ -102,7 +102,8 @@ Any command takes --account <name> to act as another account once.`
 		switch args[0] {
 		case "use":
 			// The default account is the identity every unqualified command
-			// acts as, and its guardrails may be looser.
+			// acts as, for every agent on the machine. --account reaches any
+			// account anyway: this keeps one agent from redirecting the rest.
 			if err := needPerson("changing the default account"); err != nil {
 				return err
 			}
@@ -207,9 +208,12 @@ Reading is never limited. Making them looser needs a person at a terminal:
 turning read-only off, adding to a list or dropping it. Tightening does not.`
 	lift := c.flags.Bool("any", false, "with allow: lift the limit, any chat can be written to")
 	c.run = func(ctx context.Context, args []string) error {
-		account, _, err := a.active()
+		account, cfg, err := a.active()
 		if err != nil {
 			return err
+		}
+		if cfg.Accounts[account] == nil && account != config.DefaultAccount {
+			return fmt.Errorf("no account %q, see `tg accounts`", account)
 		}
 		switch {
 		case len(args) == 0:

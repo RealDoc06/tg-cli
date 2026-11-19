@@ -8,6 +8,7 @@ LOOP
   tg chats -q <text>                  find a chat by name, to get its ID
   tg read <chat> -n 30                last 30 messages, oldest first
   tg send <chat> "text"               send, prints the new message ID
+                                      (--json gives it as .id)
   tg send <chat> --reply-to <id> "text"
   tg watch <chat> --after <id> --count 1 --timeout 10m
                                       block until someone else writes after
@@ -48,7 +49,7 @@ OUTPUT
   Messages sent from this account show the author as `me`, whoever typed
   them. Text that continues on further lines is indented by two spaces.
   Media shows as [photo], [file: name], ...
-  Add --json to any command for one JSON object per line.
+  Add --json to a command that prints data for one JSON object per line.
   Exit codes: 0 done, 1 failed, 2 wrong usage, 3 refused by the account's
   limits. Errors go to stderr.
 

@@ -52,7 +52,7 @@ func logInvocation(account, command string, args []string, started time.Time, ex
 
 	path := config.Path("log.jsonl")
 	if info, statErr := os.Stat(path); statErr == nil && info.Size() > maxLog {
-		_ = os.Rename(path, path+".1")
+		rotate(path)
 	}
 	file, openErr := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if openErr != nil {
@@ -60,4 +60,18 @@ func logInvocation(account, command string, args []string, started time.Time, ex
 	}
 	defer file.Close()
 	_, _ = file.Write(append(line, '\n'))
+}
+
+// rotate moves a full log aside. It checks the size again under the lock:
+// of two commands that both saw a full log, only the first may move it, or
+// the second would replace the archive with a nearly empty file.
+func rotate(path string) {
+	unlock, err := config.Lock()
+	if err != nil {
+		return
+	}
+	defer unlock()
+	if info, err := os.Stat(path); err == nil && info.Size() > maxLog {
+		_ = os.Rename(path, path+".1")
+	}
 }

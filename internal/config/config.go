@@ -34,14 +34,18 @@ const DefaultAccount = "default"
 // a directory of its own, so that trying things out with TG_DEMO=1 can never
 // touch the accounts and guardrails of the real one.
 func Dir() string {
+	demo := os.Getenv("TG_DEMO") != ""
 	if home := os.Getenv("TG_CLI_HOME"); home != "" {
+		if demo {
+			return filepath.Join(home, "demo")
+		}
 		return home
 	}
 	base, err := os.UserConfigDir()
 	if err != nil {
 		base = "."
 	}
-	if os.Getenv("TG_DEMO") != "" {
+	if demo {
 		return filepath.Join(base, "tg-cli-demo")
 	}
 	return filepath.Join(base, "tg-cli")
@@ -120,6 +124,14 @@ func Load() (*File, error) {
 	if err := dec.Decode(f); err != nil {
 		return nil, fmt.Errorf("%s is not valid: %w", FilePath(), err)
 	}
+	if dec.More() {
+		return nil, fmt.Errorf("%s is not valid: there is text after the closing brace", FilePath())
+	}
+	for name, account := range f.Accounts {
+		if account == nil {
+			return nil, fmt.Errorf("%s is not valid: account %q is null, give it {} or remove it", FilePath(), name)
+		}
+	}
 	return f, nil
 }
 
@@ -142,7 +154,7 @@ func (f *File) Save() error {
 // without it, a process holding an older copy could write a guardrail that
 // was just set back out of the file.
 func Update(change func(*File) error) error {
-	unlock, err := lock()
+	unlock, err := Lock()
 	if err != nil {
 		return err
 	}
@@ -157,11 +169,12 @@ func Update(change func(*File) error) error {
 	return f.Save()
 }
 
-// lock takes an exclusive lock on config.json.lock, waiting for another tg
-// process to finish. The operating system holds the lock and drops it when
+// Lock takes an exclusive lock on config.json.lock, waiting for another tg
+// process to finish. It guards every change to the files in Dir that more
+// than one process rewrites. The operating system holds the lock and drops it when
 // the process ends, however it ends, so it can neither go stale nor be
 // taken from a slow writer.
-func lock() (unlock func(), err error) {
+func Lock() (unlock func(), err error) {
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return nil, err
 	}
@@ -236,7 +249,7 @@ func Migrate() error {
 	if _, err := os.Stat(legacy); err != nil {
 		return nil
 	}
-	unlock, err := lock()
+	unlock, err := Lock()
 	if err != nil {
 		return err
 	}
@@ -250,7 +263,14 @@ func Migrate() error {
 		// The account has a session already. Set the old one aside for good:
 		// left in place, it would come back as a fresh account, without
 		// guardrails, the day this one is removed.
-		return os.Rename(legacy, legacy+".old")
+		aside := legacy + ".old"
+		for n := 2; ; n++ {
+			if _, err := os.Stat(aside); err != nil {
+				break
+			}
+			aside = fmt.Sprintf("%s.old%d", legacy, n) // keep earlier ones too
+		}
+		return os.Rename(legacy, aside)
 	}
 
 	f, err := Load()
