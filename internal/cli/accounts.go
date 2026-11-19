@@ -396,7 +396,7 @@ func (a *app) theme(args []string) error {
 	switch len(args) {
 	case 0:
 	case 1:
-		if _, ok := tui.FindTheme(args[0]); !ok {
+		if _, ok := tui.FindTheme(args[0]); !ok || args[0] == "" {
 			return errUsage{fmt.Errorf("no theme %q, pick one of %s", args[0], strings.Join(tui.ThemeNames(), ", "))}
 		}
 		if err := config.Update(func(f *config.File) error { f.Theme = args[0]; return nil }); err != nil {

@@ -146,11 +146,10 @@ func (m *model) newInput(prompt string) textinput.Model {
 	in := textinput.New()
 	in.Prompt = prompt
 	in.SetVirtualCursor(false)
+	// Every color comes from the theme: the defaults assume a dark terminal.
 	styles := in.Styles()
-	styles.Focused.Prompt = m.st.accent
-	styles.Blurred.Prompt = m.st.muted
-	styles.Focused.Placeholder = m.st.muted
-	styles.Blurred.Placeholder = m.st.muted
+	styles.Focused = textinput.StyleState{Text: m.st.text, Placeholder: m.st.muted, Suggestion: m.st.muted, Prompt: m.st.accent}
+	styles.Blurred = textinput.StyleState{Text: m.st.muted, Placeholder: m.st.muted, Suggestion: m.st.muted, Prompt: m.st.muted}
 	styles.Cursor.Color = m.st.theme.Accent
 	in.SetStyles(styles)
 	return in
