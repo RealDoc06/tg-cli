@@ -267,6 +267,20 @@ func TestConfigFileAndCommandsAgree(t *testing.T) {
 	}
 }
 
+// A theme that does not exist is refused before it reaches config.json, so
+// the TUI never has to guess what was meant.
+func TestTheme(t *testing.T) {
+	if err := run(t, "config", "theme", "mocca"); !errors.As(err, new(errUsage)) {
+		t.Errorf("unknown theme: %v", err)
+	}
+	if err := run(t, "config", "theme", "latte"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := config.Load(); cfg.Theme != "latte" {
+		t.Errorf("theme in config.json: %q", cfg.Theme)
+	}
+}
+
 func TestAccounts(t *testing.T) {
 	atTerminal(t, true)
 	for _, login := range [][]string{{"login"}, {"login", "--account", "work"}} {

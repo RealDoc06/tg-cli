@@ -185,12 +185,16 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		}
 		selfupdate.AutoCheck(a.version)
 		return a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
+			name, cfg, err := a.active()
+			if err != nil {
+				return err
+			}
 			// Naming the account only matters when there is a choice.
 			label := ""
-			if name, cfg, err := a.active(); err == nil && len(cfg.Accounts) > 1 {
+			if len(cfg.Accounts) > 1 {
 				label = name
 			}
-			return tui.Run(ctx, be, a.version, label)
+			return tui.Run(ctx, be, a.version, label, cfg.Theme)
 		})
 	}
 

@@ -50,6 +50,7 @@ type model struct {
 	version string
 	account string // shown in the status line when not empty
 	images  bool
+	st      styles
 
 	width, height int
 	focus         focus
@@ -97,16 +98,14 @@ type (
 )
 
 // Run starts the TUI and blocks until the user quits. account, when not
-// empty, is shown so it is clear whose chats these are.
-func Run(ctx context.Context, be core.Backend, version, account string) error {
+// empty, is shown so it is clear whose chats these are. theme names one of
+// Themes, "" for the default.
+func Run(ctx context.Context, be core.Backend, version, account, theme string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	m := &model{
-		ctx: ctx, be: be, version: version, account: account, images: termimg.Supported(),
-		histories: map[int64]*history{}, avatars: map[int64]int{},
-		input: newInput("> "), filter: newInput("/ "),
-	}
+	m := newModel(ctx, be, theme)
+	m.version, m.account, m.images = version, account, termimg.Supported()
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	go func() {
 		if err := be.Watch(ctx, func(ev core.Event) { p.Send(eventMsg(ev)) }); err != nil && ctx.Err() == nil {
@@ -130,13 +129,30 @@ func Run(ctx context.Context, be core.Backend, version, account string) error {
 	return err
 }
 
-func newInput(prompt string) textinput.Model {
+// newModel sets up an empty model drawn with the named theme. A name that
+// is not a theme falls back to the default and says so.
+func newModel(ctx context.Context, be core.Backend, theme string) *model {
+	t, ok := FindTheme(theme)
+	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, avatars: map[int64]int{}}
+	if !ok {
+		t, _ = FindTheme(DefaultTheme)
+		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", theme, strings.Join(ThemeNames(), ", "))
+	}
+	m.st = newStyles(t)
+	m.input, m.filter = m.newInput("> "), m.newInput("/ ")
+	return m
+}
+
+func (m *model) newInput(prompt string) textinput.Model {
 	in := textinput.New()
 	in.Prompt = prompt
 	in.SetVirtualCursor(false)
 	styles := in.Styles()
-	styles.Focused.Prompt = accent
-	styles.Blurred.Prompt = dim
+	styles.Focused.Prompt = m.st.accent
+	styles.Blurred.Prompt = m.st.muted
+	styles.Focused.Placeholder = m.st.muted
+	styles.Blurred.Placeholder = m.st.muted
+	styles.Cursor.Color = m.st.theme.Accent
 	in.SetStyles(styles)
 	return in
 }

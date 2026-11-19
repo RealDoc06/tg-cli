@@ -15,6 +15,7 @@ import (
 	"github.com/RealDoc06/tg-cli/internal/config"
 	"github.com/RealDoc06/tg-cli/internal/core"
 	"github.com/RealDoc06/tg-cli/internal/mtp"
+	"github.com/RealDoc06/tg-cli/internal/tui"
 )
 
 // interactive reports whether tg is run from a terminal, which is as close
@@ -193,7 +194,7 @@ func (a *app) printAccounts() error {
 }
 
 func (a *app) configCmd() *command {
-	c := a.newCommand("config [read-only on|off] [allow|disallow <chat>...]", "Show or change an account's guardrails", 0, -1)
+	c := a.newCommand("config [read-only on|off] [allow|disallow <chat>...] [theme <name>]", "Show or change an account's guardrails and the TUI theme", 0, -1)
 	c.long = `Show or change what an account is allowed to do. The settings live in
 config.json, which you can also edit by hand: the commands and the file are
 the same thing.
@@ -203,6 +204,8 @@ the same thing.
   tg config allow <chat>...     write only to these chats (adds to the list)
   tg config disallow <chat>...  take chats off the list
   tg config allow --any         drop the list, any chat can be written to
+  tg config theme               list the TUI themes
+  tg config theme <name>        pick the TUI's colors, for every account
 
 Guardrails apply to every write: sending, marking as read, creating groups.
 Reading is never limited. Making them looser needs a person at a terminal:
@@ -256,6 +259,15 @@ turning read-only off, adding to a list or dropping it. Tightening does not.`
 				return nil
 			})
 
+		case args[0] == "theme" && len(args) == 1:
+			return a.printThemes(cfg.Theme)
+
+		case args[0] == "theme" && len(args) == 2:
+			if _, ok := tui.FindTheme(args[1]); !ok {
+				return errUsage{fmt.Errorf("no theme %q, pick one of %s", args[1], strings.Join(tui.ThemeNames(), ", "))}
+			}
+			err = config.Update(func(f *config.File) error { f.Theme = args[1]; return nil })
+
 		case args[0] == "disallow" && len(args) > 1:
 			var ids []int64
 			if ids, err = a.listedIDs(ctx, account, args[1:]); err != nil {
@@ -264,7 +276,7 @@ turning read-only off, adding to a list or dropping it. Tightening does not.`
 			err = config.Update(func(f *config.File) error { return disallow(f.Ensure(account), ids) })
 
 		default:
-			return errUsage{errors.New("usage: tg config [read-only on|off] [allow|disallow <chat>...], see `tg config --help`")}
+			return errUsage{errors.New("usage: tg config [read-only on|off] [allow|disallow <chat>...] [theme <name>], see `tg config --help`")}
 		}
 		if err != nil {
 			return err
@@ -354,6 +366,7 @@ func (a *app) printConfig(account string) error {
 		return emitJSON(map[string]any{
 			"file": config.FilePath(), "account": account, "user": entry.User,
 			"read_only": entry.ReadOnly, "send_to": append([]config.Chat{}, entry.SendTo...),
+			"theme": themeName(cfg.Theme),
 		})
 	}
 	readOnly := "off"
@@ -363,6 +376,7 @@ func (a *app) printConfig(account string) error {
 	fmt.Printf("file       %s\n", config.FilePath())
 	fmt.Printf("account    %s (%s)\n", account, describeUser(entry.User))
 	fmt.Printf("read-only  %s\n", readOnly)
+	fmt.Printf("theme      %s\n", themeName(cfg.Theme))
 	if len(entry.SendTo) == 0 {
 		fmt.Println("sends to   any chat")
 		return nil
@@ -370,6 +384,30 @@ func (a *app) printConfig(account string) error {
 	fmt.Println("sends to   only these chats:")
 	for _, chat := range entry.SendTo {
 		fmt.Printf("           %d  %s\n", chat.ID, chat.Title)
+	}
+	return nil
+}
+
+// themeName is the theme the TUI draws with: the configured one, or the default.
+func themeName(name string) string {
+	if name == "" {
+		return tui.DefaultTheme
+	}
+	return name
+}
+
+// printThemes lists the themes, * marking the one in use.
+func (a *app) printThemes(current string) error {
+	current = themeName(current)
+	if a.json {
+		return emitJSON(map[string]any{"theme": current, "themes": tui.ThemeNames()})
+	}
+	for _, name := range tui.ThemeNames() {
+		mark := " "
+		if name == current {
+			mark = "*"
+		}
+		fmt.Println(mark, name)
 	}
 	return nil
 }

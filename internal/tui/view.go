@@ -14,23 +14,6 @@ import (
 	"github.com/RealDoc06/tg-cli/internal/termimg"
 )
 
-var (
-	accent = lipgloss.NewStyle().Foreground(lipgloss.Color("#2AABEE"))
-	dim    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	bold   = lipgloss.NewStyle().Bold(true)
-	errSty = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
-
-	// peerColors are the name and initials colors, picked by peer ID.
-	peerColors = []string{"#E17076", "#FAA774", "#A695E7", "#7BC862", "#6EC9CB", "#65AADD", "#EE7AAE"}
-)
-
-func peerColor(id int64) lipgloss.Style {
-	if id < 0 {
-		id = -id
-	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(peerColors[id%int64(len(peerColors))]))
-}
-
 // layout returns the widths of the chat list and of the conversation pane.
 // Narrow terminals show only the pane that has focus.
 func (m *model) layout() (left, right int) {
@@ -54,6 +37,8 @@ func (m *model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "tg"
+	v.BackgroundColor = m.st.theme.Background
+	v.ForegroundColor = m.st.theme.Text
 	if m.width == 0 {
 		return v
 	}
@@ -72,7 +57,7 @@ func (m *model) View() tea.View {
 	for i := range body {
 		switch {
 		case lw > 0 && rw > 0:
-			rows = append(rows, left[i]+dim.Render("│")+right[i])
+			rows = append(rows, left[i]+m.st.border.Render("│")+right[i])
 		case lw > 0:
 			rows = append(rows, left[i])
 		default:
@@ -110,7 +95,7 @@ func (m *model) chatList(w, h int) []string {
 		m.filter.SetWidth(w - 4)
 		rows = append(rows, fit(" "+m.filter.View(), w))
 	default:
-		rows = append(rows, fit(" "+bold.Render("Chats"), w))
+		rows = append(rows, fit(" "+m.st.accent.Bold(true).Render("Chats"), w))
 	}
 
 	chats := m.visible()
@@ -119,7 +104,7 @@ func (m *model) chatList(w, h int) []string {
 		if m.chatsDone {
 			hint = "no chats"
 		}
-		rows = append(rows, fit(" "+dim.Render(hint), w))
+		rows = append(rows, fit(" "+m.st.muted.Render(hint), w))
 	}
 	for i := m.top; i < len(chats) && len(rows)+1 < h; i++ {
 		rows = append(rows, m.chatRow(chats[i], i == m.sel, w)...)
@@ -133,23 +118,23 @@ func (m *model) chatList(w, h int) []string {
 func (m *model) chatRow(c *core.Chat, selected bool, w int) []string {
 	bar := " "
 	if selected {
-		bar = dim.Render("▌")
+		bar = m.st.muted.Render("▌")
 		if m.focus != focusInput {
-			bar = accent.Render("▌")
+			bar = m.st.accent.Render("▌")
 		}
 	}
 
 	title := c.Title
 	switch {
 	case c.ID == m.openID:
-		title = accent.Bold(true).Render(title)
+		title = m.st.accent.Bold(true).Render(title)
 	case selected || c.Unread > 0:
-		title = bold.Render(title)
+		title = m.st.bold.Render(title)
 	}
 
 	var stamp, preview, badge string
 	if c.Last != nil {
-		stamp = dim.Render(shortTime(c.Last.Date))
+		stamp = m.st.muted.Render(shortTime(c.Last.Date))
 		preview = c.Last.Preview()
 		switch {
 		case c.Last.Out:
@@ -160,14 +145,14 @@ func (m *model) chatRow(c *core.Chat, selected bool, w int) []string {
 		preview = strings.Join(strings.Fields(preview), " ")
 	}
 	if c.Unread > 0 {
-		badge = accent.Bold(true).Render(fmt.Sprint(c.Unread))
+		badge = m.st.accent.Bold(true).Render(fmt.Sprint(c.Unread))
 	}
 
 	avatar := m.avatar(c)
 	text := w - 1 - avatarCols - 1
 	return []string{
 		bar + avatar[0] + " " + spread(title, stamp, text),
-		bar + avatar[1] + " " + spread(dim.Render(preview), badge, text),
+		bar + avatar[1] + " " + spread(m.st.muted.Render(preview), badge, text),
 	}
 }
 
@@ -177,9 +162,9 @@ func (m *model) avatar(c *core.Chat) []string {
 	if id := m.avatars[c.ID]; id != 0 {
 		return termimg.Placeholder(id, avatarCols, avatarRows)
 	}
-	color := peerColors[abs(c.ID)%int64(len(peerColors))]
-	fill := lipgloss.NewStyle().Background(lipgloss.Color(color)).Foreground(lipgloss.Color("#000000")).Bold(true)
-	edge := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+	color := m.st.peer(c.ID)
+	fill := lipgloss.NewStyle().Background(color).Foreground(m.st.theme.Background).Bold(true)
+	edge := lipgloss.NewStyle().Foreground(color)
 	return []string{
 		fill.Render(fit(" "+initials(c.Title), avatarCols)),
 		edge.Render(strings.Repeat("▀", avatarCols)),
@@ -196,20 +181,20 @@ func (m *model) conversation(w, h int) []string {
 			rows = append(rows, strings.Repeat(" ", w))
 		}
 		if h > 2 {
-			rows[h/2] = center(dim.Render("select a chat and press enter"), w)
+			rows[h/2] = center(m.st.muted.Render("select a chat and press enter"), w)
 		}
 		return rows
 	}
 
-	title := " " + bold.Render(c.Title)
+	title := " " + m.st.bold.Render(c.Title)
 	if c.Username != "" {
-		title += dim.Render("  @" + c.Username)
+		title += m.st.muted.Render("  @" + c.Username)
 	}
-	rows = append(rows, spread(title, dim.Render(string(c.Kind))+" ", w))
+	rows = append(rows, spread(title, m.st.muted.Render(string(c.Kind))+" ", w))
 
 	lines := m.messageLines(hist, w)
 	if !hist.loaded {
-		lines = []string{dim.Render(" loading")}
+		lines = []string{m.st.muted.Render(" loading")}
 	}
 	view := h - 2
 	end := max(0, len(lines)-m.scroll)
@@ -240,33 +225,33 @@ func (m *model) messageLines(h *history, w int) []string {
 
 		if d := msg.Date.Format("Mon 2 Jan 2006"); d != day {
 			day = d
-			lines = append(lines, center(dim.Render(d), w))
+			lines = append(lines, center(m.st.muted.Render(d), w))
 		}
 		if ref := byID[msg.ReplyTo]; ref != nil {
 			quote := ansi.Truncate(firstWord(ref.From)+": "+strings.Join(strings.Fields(ref.Preview()), " "), w-indent-3, "…")
-			lines = append(lines, strings.Repeat(" ", indent)+dim.Render("↪ "+quote))
+			lines = append(lines, strings.Repeat(" ", indent)+m.st.muted.Render("↪ "+quote))
 		}
 
-		name := peerColor(msg.FromID).Render(msg.From)
+		name := lipgloss.NewStyle().Foreground(m.st.peer(msg.FromID)).Render(msg.From)
 		if msg.Out {
-			name = accent.Render("You")
+			name = m.st.accent.Render("You")
 		}
 		body := msg.Text
 		if msg.Media != "" {
-			body = strings.TrimSpace(dim.Render("["+msg.Media+"]") + " " + body)
+			body = strings.TrimSpace(m.st.muted.Render("["+msg.Media+"]") + " " + body)
 		}
 		text := name + ": " + body
 		if msg.Service {
-			text = dim.Render(msg.From + " " + msg.Text)
+			text = m.st.muted.Render(msg.From + " " + msg.Text)
 		}
 		if msg.Edited {
-			text += dim.Render(" (edited)")
+			text += m.st.muted.Render(" (edited)")
 		}
 
 		for j, l := range strings.Split(ansi.Wrap(text, max(10, w-indent-1), ""), "\n") {
 			prefix := strings.Repeat(" ", indent)
 			if j == 0 {
-				prefix = " " + dim.Render(msg.Date.Format("15:04")) + " "
+				prefix = " " + m.st.muted.Render(msg.Date.Format("15:04")) + " "
 			}
 			lines = append(lines, prefix+l)
 		}
@@ -275,23 +260,28 @@ func (m *model) messageLines(h *history, w int) []string {
 }
 
 func (m *model) statusLine() string {
-	hints := "↑↓ move  enter open  / filter  tab compose  q quit"
+	// Pairs of key and what it does.
+	hints := []string{"↑↓", "move", "enter", "open", "/", "filter", "tab", "compose", "q", "quit"}
 	switch m.focus {
 	case focusInput:
-		hints = "enter send  pgup/pgdn scroll  esc chats  ctrl+c quit"
+		hints = []string{"enter", "send", "pgup/pgdn", "scroll", "esc", "chats", "ctrl+c", "quit"}
 	case focusFilter:
-		hints = "type to filter  enter open  esc clear"
+		hints = []string{"type", "to filter", "enter", "open", "esc", "clear"}
 	}
 	// An error takes the whole line: it is usually longer than what is left
 	// next to the hints, and matters more than them.
 	if m.status != "" {
-		return fit(" "+errSty.Render(m.status), m.width)
+		return fit(" "+m.st.err.Render(m.status), m.width)
 	}
-	right := dim.Render("tg " + m.version)
+	right := m.st.muted.Render("tg " + m.version)
 	if m.account != "" {
-		right = accent.Render(m.account) + "  " + right
+		right = m.st.accent.Render(m.account) + "  " + right
 	}
-	return spread(" "+dim.Render(hints), right+" ", m.width)
+	var help strings.Builder
+	for i := 0; i < len(hints); i += 2 {
+		help.WriteString(" " + m.st.text.Render(hints[i]) + " " + m.st.muted.Render(hints[i+1]) + " ")
+	}
+	return spread(help.String(), right+" ", m.width)
 }
 
 // fit truncates or pads s to exactly w cells.

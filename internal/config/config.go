@@ -78,7 +78,9 @@ type File struct {
 	APIID   int    `json:"api_id,omitempty"`
 	APIHash string `json:"api_hash,omitempty"`
 	// Account is the one commands use when none is named.
-	Account  string              `json:"account,omitempty"`
+	Account string `json:"account,omitempty"`
+	// Theme names the TUI's colors, see `tg config theme`. Empty is the default.
+	Theme    string              `json:"theme,omitempty"`
 	Accounts map[string]*Account `json:"accounts,omitempty"`
 }
 
