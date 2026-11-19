@@ -557,7 +557,7 @@ nothing is lost between sending or reading and starting to watch.`
 					cancel()
 				}
 			}
-			return be.Watch(ctx, func(ev core.Event) {
+			err := be.Watch(ctx, func(ev core.Event) {
 				if ev.Kind != core.EventReady {
 					show(ev)
 					return
@@ -584,9 +584,12 @@ nothing is lost between sending or reading and starting to watch.`
 					}
 				}
 			})
+			// Returned from here so the backend words it like any other
+			// Telegram error.
+			return cmp.Or(catchUpErr, err)
 		})
 		if catchUpErr != nil {
-			return catchUpErr // also when the timeout hit while catching up
+			return err // also when the timeout hit while catching up
 		}
 		// Running out of time is a normal way to stop, unless the caller was
 		// waiting for a number of messages that did not all arrive.

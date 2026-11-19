@@ -228,38 +228,48 @@ func CheckName(name string) error {
 
 // Migrate moves the session of versions that knew a single account into the
 // default account. It does nothing once that is done. It runs under the
-// configuration lock, so two tg processes starting together do it once.
+// configuration lock, so two tg processes starting together do it once, and
+// it registers the account before moving anything: whatever fails, the old
+// session is still in place for the next run to pick up.
 func Migrate() error {
 	legacy := Path("session.json")
 	if _, err := os.Stat(legacy); err != nil {
 		return nil
 	}
-	return Update(func(f *File) error {
-		if _, err := os.Stat(legacy); err != nil {
-			return nil // another process got here first
-		}
-		dir := AccountDir(DefaultAccount)
-		session := filepath.Join(dir, "session.json")
-		if _, err := os.Stat(session); err == nil {
-			// The account has a session already. Set the old one aside for
-			// good: left in place, it would come back as a fresh account,
-			// without guardrails, the day this one is removed.
-			return os.Rename(legacy, legacy+".old")
-		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-		// The peer cache can be rebuilt, losing it is not worth failing over.
-		_ = os.Rename(Path("peers.json"), filepath.Join(dir, "peers.json"))
-		if err := os.Rename(legacy, session); err != nil {
-			return err
-		}
-		f.Ensure(DefaultAccount)
-		if f.Account == "" {
-			f.Account = DefaultAccount
-		}
-		return nil
-	})
+	unlock, err := lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if _, err := os.Stat(legacy); err != nil {
+		return nil // another process got here first
+	}
+	dir := AccountDir(DefaultAccount)
+	session := filepath.Join(dir, "session.json")
+	if _, err := os.Stat(session); err == nil {
+		// The account has a session already. Set the old one aside for good:
+		// left in place, it would come back as a fresh account, without
+		// guardrails, the day this one is removed.
+		return os.Rename(legacy, legacy+".old")
+	}
+
+	f, err := Load()
+	if err != nil {
+		return err
+	}
+	f.Ensure(DefaultAccount)
+	if f.Account == "" {
+		f.Account = DefaultAccount
+	}
+	if err := f.Save(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// The peer cache can be rebuilt, losing it is not worth failing over.
+	_ = os.Rename(Path("peers.json"), filepath.Join(dir, "peers.json"))
+	return os.Rename(legacy, session)
 }
 
 // Credentials identify the application to Telegram.
