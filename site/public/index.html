@@ -123,10 +123,11 @@ pre, .cmd code {
   overflow-wrap: anywhere;
 }
 pre { margin: 0; padding: 1rem 1.1rem; overflow-x: auto; }
+pre:focus-visible { outline-offset: -2px; }
 pre .t { white-space: pre; }   /* tables scroll sideways instead of wrapping */
 pre.idle > span { visibility: hidden; }   /* waits, out of sight, to be typed */
-.p { color: var(--overlay); user-select: none; }
-.dim, .k { color: var(--subtext); }
+.p, .dim, .k { color: var(--subtext); }
+.p { user-select: none; }
 .e { color: var(--red); }
 .fn { color: var(--blue); }
 .str, .me { color: var(--green); }
@@ -170,8 +171,8 @@ footer a:hover { color: var(--fg); }
 @media (max-width: 40rem) {
   .phone-only { display: block; }
   .checks.row { display: grid; }
-  .bar { padding-inline: .85rem; }
-  .tabs { gap: 1rem; }
+  .bar { padding-inline: .75rem; gap: .5rem; }
+  .tabs { gap: .75rem; }
   pre { font-size: .74rem; padding: .85rem; }
   .cmd { padding: .85rem; gap: .75rem; }
   .btn { min-width: 4.25rem; padding-inline: .75rem; }
@@ -180,7 +181,7 @@ footer a:hover { color: var(--fg); }
   [data-replay] { display: none; }   /* nothing to replay when nothing is typed */
 }
 </style>
-<noscript><style>.tabs button:not([aria-pressed="true"]), #copy, [data-replay] { display: none; }</style></noscript>
+<noscript><style>.bar:has(.tabs), #copy { display: none; }</style></noscript>
 </head>
 <body>
 
@@ -210,13 +211,13 @@ footer a:hover { color: var(--fg); }
       <button type="button" class="btn" id="copy">Copy</button>
     </div>
   </div>
-  <p class="note"><span id="phone-note" hidden>Run it on your computer. </span>Then <a href="https://github.com/RealDoc06/tg-cli#install"><code>tg login</code></a>. <span id="install-note">Apple silicon and Intel.</span><noscript> On Windows, see the <a href="https://github.com/RealDoc06/tg-cli#install">README</a>.</noscript></p>
+  <p class="note"><span id="phone-note" hidden>Run it on your computer. </span>Then <a href="https://github.com/RealDoc06/tg-cli#install"><code>tg login</code></a>. <span id="install-note">macOS and Linux.</span><noscript> On Windows, see the <a href="https://github.com/RealDoc06/tg-cli#install">README</a>.</noscript></p>
 </div>
 
 <figure class="wrap">
   <picture>
     <source media="(max-width: 40rem)" srcset="img/tui-list-phone.png" width="860" height="960">
-    <img class="shot" src="img/tui.png" width="2360" height="1320" alt="The tg terminal client: a chat list with profile pictures on the left, the Homelab group conversation on the right, a message being typed at the bottom.">
+    <img class="shot" src="img/tui.png" width="2360" height="1320" alt="The tg terminal client: a chat list with profile pictures, message previews and unread counts.">
   </picture>
   <img class="shot phone-only" src="img/tui-chat-phone.png" width="860" height="1100" loading="lazy" decoding="async" alt="The Homelab group conversation in a narrow terminal, with a message being typed.">
   <figcaption>Run <code>tg</code> for the terminal client. Live messages, mouse support, profile pictures in Kitty and Ghostty.</figcaption>
@@ -239,7 +240,7 @@ footer a:hover { color: var(--fg); }
         </div>
         <button type="button" data-replay>replay</button>
       </div>
-<pre data-pane="inbox"><span><span class="p">$ </span><span class="c">tg chats -u</span>
+<pre data-pane="inbox" tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">tg chats -u</span>
 </span><span class="t"><span class="dim">ID              KIND     UNREAD  TITLE                LAST</span>
 101             user     2       Alice Rossi @alice   2026-11-19 18:19 the white one
 -1001000000201  group    5       Homelab              2026-11-19 18:08 backups finished, 412 GB in 38 minutes
@@ -254,7 +255,7 @@ footer a:hover { color: var(--fg); }
 </span><span><span class="p">$ </span><span class="c">tg send @alice "on my way"</span>
 </span><span>sent message 37 to Alice Rossi (101)
 </span><span><span class="p">$ </span><span class="cur"></span></span></pre>
-<pre data-pane="json" hidden><span><span class="p">$ </span><span class="c">tg read homelab -n 2 --json</span>
+<pre data-pane="json" hidden tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">tg read homelab -n 2 --json</span>
 </span><span class="o">{"id":16,"chat_id":-1001000000201,"from_id":2133232113,"from":"Giulia","date":"2026-11-19T17:50:00+01:00","text":"ping me if you need a hand with the migration"}
 {"id":17,"chat_id":-1001000000201,"from_id":74113578,"from":"Marco","date":"2026-11-19T18:08:00+01:00","text":"backups finished, 412 GB in 38 minutes"}
 </span><span><span class="p">$ </span><span class="c">tg send @alice "on my way" --json | jq .id</span>
@@ -262,7 +263,7 @@ footer a:hover { color: var(--fg); }
 </span><span><span class="p">$ </span><span class="c">git log -5 --oneline | tg send me</span>
 </span><span>sent message 38 to Saved Messages (1000)
 </span><span><span class="p">$ </span><span class="cur"></span></span></pre>
-<pre data-pane="errors" hidden><span><span class="p">$ </span><span class="c">tg read nobody</span>
+<pre data-pane="errors" hidden tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">tg read nobody</span>
 </span><span class="e">tg: no chat matches "nobody", find it with `tg chats -q &lt;text&gt;`
 </span><span><span class="p">$ </span><span class="c">tg sned @alice hi</span>
 </span><span class="e">tg: unknown command "sned", see `tg guide`
@@ -271,7 +272,7 @@ footer a:hover { color: var(--fg); }
 </span><span><span class="p">$ </span><span class="c">echo $?</span>
 </span><span class="num">2
 </span><span><span class="p">$ </span><span class="cur"></span></span></pre>
-<pre data-pane="guide" hidden><span><span class="p">$ </span><span class="c">tg guide | head -18</span>
+<pre data-pane="guide" hidden tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">tg guide | head -18</span>
 </span><span class="t">tg: Telegram from the command line, for agents.
 
 You act as a real person's Telegram account. Whatever you send is sent as
@@ -321,7 +322,7 @@ them, to real people, and cannot be taken back by this tool.
     </div>
     <div class="term" data-term>
       <div class="bar"><span class="label">guardrails</span><button type="button" data-replay>replay</button></div>
-<pre><span><span class="p">$ </span><span class="c">tg config allow Homelab</span><span class="k">   # you, once</span>
+<pre tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">tg config allow Homelab</span><span class="k">   # you, once</span>
 </span><span class="t"><span class="dim">file       </span>/home/sam/.config/tg-cli/config.json
 <span class="dim">account    </span>default (Sam Taylor @samt)
 <span class="dim">read-only  </span>off
@@ -362,7 +363,8 @@ const SYSTEMS = {
 
 const platform = `${navigator.userAgentData?.platform ?? ''} ${navigator.platform ?? ''} ${navigator.userAgent}`;
 // tg does not run on phones: say so, and still preselect the nearest system.
-document.getElementById('phone-note').hidden = !/android|iphone|ipad|ipod/i.test(platform);
+const handheld = /android|iphone|ipad|ipod/i.test(platform) || (/mac/i.test(platform) && navigator.maxTouchPoints > 1); // iPadOS says it is a Mac
+document.getElementById('phone-note').hidden = !handheld;
 
 function detectSystem() {
   if (/mac|iphone|ipad|ipod/i.test(platform)) return 'macos';
@@ -499,6 +501,14 @@ for (const term of document.querySelectorAll('[data-term]')) {
   const panes = [...term.querySelectorAll('pre')];
   const tabs = [...term.querySelectorAll('button[data-pane]')];
   const active = () => panes.find((pane) => !pane.hidden);
+  // Typing starts when the terminal scrolls into view, or when the visitor gets there first.
+  const observer = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) start();
+  }, { threshold: 0.25 });
+  const start = () => {
+    observer.disconnect();
+    play(active());
+  };
 
   for (const tab of tabs) {
     tab.addEventListener('click', () => {
@@ -507,18 +517,15 @@ for (const term of document.querySelectorAll('[data-term]')) {
         finish(pane);
         pane.hidden = pane.dataset.pane !== tab.dataset.pane;
       }
-      play(active());
+      start();
     });
   }
-  term.querySelector('[data-replay]').addEventListener('click', () => play(active()));
+  term.querySelector('[data-replay]').addEventListener('click', start);
+  // Reduced motion switched on while typing: show everything at once.
+  still.addEventListener('change', () => { if (still.matches) panes.forEach(finish); });
 
   if (still.matches) continue;
   active().classList.add('idle');
-  const observer = new IntersectionObserver((entries) => {
-    if (!entries.some((entry) => entry.isIntersecting)) return;
-    observer.disconnect();
-    play(active());
-  }, { threshold: 0.25 });
   observer.observe(term);
 }
 </script>
