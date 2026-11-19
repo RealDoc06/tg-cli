@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -122,5 +123,16 @@ func TestFilterNarrowsChats(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if len(m.visible()) != len(m.chats) || m.focus != focusChats {
 		t.Error("escape did not clear the filter")
+	}
+}
+
+// A refusal from the guardrails is a long sentence. It must be shown, not
+// dropped for not fitting next to the key hints.
+func TestLongErrorIsShown(t *testing.T) {
+	m := loaded(t, 80, 24)
+	m.Update(errMsg{errors.New(`account "work" is read-only, sending is off. Only the account's owner can change that`)})
+	rows := strings.Split(m.View().Content, "\n")
+	if last := ansi.Strip(rows[len(rows)-1]); !strings.Contains(last, `account "work" is read-only`) {
+		t.Errorf("status line: %q", last)
 	}
 }

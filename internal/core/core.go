@@ -5,6 +5,8 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"time"
 )
 
@@ -94,6 +96,9 @@ type EventKind string
 const (
 	EventMessage EventKind = "message"
 	EventEdit    EventKind = "edit"
+	// EventReady is sent once, when the subscription is live: every message
+	// from then on is reported. It carries no chat or message.
+	EventReady EventKind = "ready"
 )
 
 // Event is a live update. Chat describes the chat the message belongs to, so
@@ -118,13 +123,28 @@ type Backend interface {
 	History(ctx context.Context, chatID int64, q HistoryQuery) ([]Message, error)
 	Send(ctx context.Context, chatID int64, req SendRequest) (Message, error)
 	MarkRead(ctx context.Context, chatID int64, maxID int) error
+	// CreateGroup makes a new group with only the account in it.
+	CreateGroup(ctx context.Context, title string) (Chat, error)
 	Search(ctx context.Context, q SearchQuery) ([]Message, error)
 	// Avatar returns the encoded profile photo of a chat (JPEG or PNG).
 	Avatar(ctx context.Context, chat Chat) ([]byte, error)
 	// Download saves the media of a message into dir and returns the file path.
 	Download(ctx context.Context, chatID int64, msgID int, dir string) (string, error)
-	// Watch blocks and reports live events until ctx is done.
+	// Watch blocks and reports live events until ctx is done, starting with
+	// an EventReady. fn must return quickly: nothing else is delivered, and
+	// requests to the backend may stall, while it runs.
 	Watch(ctx context.Context, fn func(Event)) error
+}
+
+// CreateNew creates the file a download is saved to. The name comes from
+// whoever sent the file, so it may never replace a file that is already
+// there: creating it is refused instead, atomically.
+func CreateNew(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if os.IsExist(err) {
+		return nil, fmt.Errorf("%s already exists, pick another directory with -o", path)
+	}
+	return file, err
 }
 
 // Preview is the one line summary of a message used in chat lists.

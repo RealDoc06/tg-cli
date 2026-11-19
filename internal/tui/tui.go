@@ -5,6 +5,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -47,6 +48,7 @@ type model struct {
 	ctx     context.Context
 	be      core.Backend
 	version string
+	account string // shown in the status line when not empty
 	images  bool
 
 	width, height int
@@ -94,13 +96,14 @@ type (
 	eventMsg core.Event
 )
 
-// Run starts the TUI and blocks until the user quits.
-func Run(ctx context.Context, be core.Backend, version string) error {
+// Run starts the TUI and blocks until the user quits. account, when not
+// empty, is shown so it is clear whose chats these are.
+func Run(ctx context.Context, be core.Backend, version, account string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	m := &model{
-		ctx: ctx, be: be, version: version, images: termimg.Supported(),
+		ctx: ctx, be: be, version: version, account: account, images: termimg.Supported(),
 		histories: map[int64]*history{}, avatars: map[int64]int{},
 		input: newInput("> "), filter: newInput("/ "),
 	}
@@ -221,6 +224,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		ev := core.Event(msg)
+		if ev.Kind == core.EventReady {
+			return m, nil
+		}
 		m.addMessage(ev.Message, &ev.Chat)
 		cmds := []tea.Cmd{m.afterMove()}
 		if ev.Message.ChatID == m.openID && !ev.Message.Out {
@@ -473,7 +479,9 @@ func (m *model) markRead(chatID int64) tea.Cmd {
 	}
 	maxID := h.msgs[len(h.msgs)-1].ID
 	return func() tea.Msg {
-		if err := m.be.MarkRead(m.ctx, chatID, maxID); err != nil {
+		// Opening a chat marks it read as a courtesy. When the account's
+		// guardrails forbid that, there is nothing to report.
+		if err := m.be.MarkRead(m.ctx, chatID, maxID); err != nil && !errors.As(err, new(*core.RefusedError)) {
 			return errMsg{err}
 		}
 		return nil

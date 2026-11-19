@@ -49,13 +49,16 @@ type peer struct {
 // on every command.
 type peerStore struct {
 	mu    sync.Mutex
+	path  string
 	peers map[int64]peer
 	dirty bool
 }
 
-func loadPeers() *peerStore {
-	s := &peerStore{peers: map[int64]peer{}}
-	_ = config.ReadJSON(config.Path("peers.json"), &s.peers) // a missing or broken cache is rebuilt
+// loadPeers reads the cache of one account. Access hashes only work for the
+// account that received them, so accounts never share a cache.
+func loadPeers(path string) *peerStore {
+	s := &peerStore{path: path, peers: map[int64]peer{}}
+	_ = config.ReadJSON(path, &s.peers) // a missing or broken cache is rebuilt
 	return s
 }
 
@@ -66,7 +69,7 @@ func (s *peerStore) save() error {
 		return nil
 	}
 	s.dirty = false
-	return config.WriteJSON(config.Path("peers.json"), s.peers)
+	return config.WriteJSON(s.path, s.peers)
 }
 
 func (s *peerStore) get(id int64) (peer, bool) {

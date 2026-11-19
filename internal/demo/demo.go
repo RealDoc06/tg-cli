@@ -31,6 +31,9 @@ type Backend struct {
 	events   chan core.Event
 }
 
+// channelBase is where supergroup IDs start, as on Telegram.
+const channelBase = 1_000_000_000_300
+
 var self = core.User{ID: 1000, Name: "Sam Taylor", Username: "samt", Phone: "15550100"}
 
 // now is fixed so demo output and screenshots are reproducible.
@@ -171,7 +174,7 @@ func (b *Backend) Resolve(_ context.Context, ref string) (core.Chat, error) {
 			return c, nil
 		}
 	}
-	return core.Chat{}, fmt.Errorf("no chat matches %q", ref)
+	return core.Chat{}, fmt.Errorf("no chat matches %q, find it with `tg chats -q <text>`", ref)
 }
 
 func (b *Backend) History(_ context.Context, chatID int64, q core.HistoryQuery) ([]core.Message, error) {
@@ -230,6 +233,14 @@ func (b *Backend) MarkRead(_ context.Context, chatID int64, _ int) error {
 	return nil
 }
 
+func (b *Backend) CreateGroup(_ context.Context, title string) (core.Chat, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	chat := core.Chat{ID: -channelBase - int64(len(b.chats)), Kind: core.KindGroup, Title: title}
+	b.chats = append([]core.Chat{chat}, b.chats...)
+	return chat, nil
+}
+
 func (b *Backend) Search(_ context.Context, q core.SearchQuery) ([]core.Message, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -276,11 +287,21 @@ func (b *Backend) Avatar(_ context.Context, chat core.Chat) ([]byte, error) {
 }
 
 func (b *Backend) Download(_ context.Context, chatID int64, msgID int, dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
 	path := filepath.Join(dir, fmt.Sprintf("demo_%d_%d.txt", chatID, msgID))
-	return path, os.WriteFile(path, []byte("demo media\n"), 0o644)
+	file, err := core.CreateNew(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	_, err = file.WriteString("demo media\n")
+	return path, err
 }
 
 func (b *Backend) Watch(ctx context.Context, fn func(core.Event)) error {
+	fn(core.Event{Kind: core.EventReady})
 	for {
 		select {
 		case <-ctx.Done():

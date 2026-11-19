@@ -12,6 +12,8 @@ import (
 	"golang.org/x/term"
 
 	"github.com/RealDoc06/tg-cli/internal/config"
+	"github.com/RealDoc06/tg-cli/internal/core"
+	"github.com/RealDoc06/tg-cli/internal/demo"
 	"github.com/RealDoc06/tg-cli/internal/mtp"
 )
 
@@ -77,6 +79,9 @@ func (a *app) loginCmd() *command {
 	c.long = `Log in with a phone number and the code Telegram sends to it. The session is
 stored on this machine only and stays valid until "tg logout".
 
+To add another account next to the first, give it a name:
+  tg login --account work
+
 Telegram requires every client to identify itself with an API ID and hash.
 If this build has none, create them once at https://my.telegram.org/apps
 and tg will ask for them here.`
@@ -87,8 +92,20 @@ and tg will ask for them here.`
 	apiID := c.flags.String("api-id", "", "Telegram API ID to save")
 	apiHash := c.flags.String("api-hash", "", "Telegram API hash to save")
 	c.run = func(ctx context.Context, _ []string) error {
+		account, _, err := a.active()
+		if err != nil {
+			return err
+		}
 		if os.Getenv("TG_DEMO") != "" {
-			return errors.New("TG_DEMO is set, there is nothing to log in to")
+			// The demo has nothing to log in to, but registering the account
+			// lets the account commands be tried.
+			return a.loggedIn(account, demo.New().Self())
+		}
+		// A login creates a session with no guardrails. Left to agents, one
+		// could read the login code Telegram sends to the account's own
+		// chats and mint itself an unrestricted account.
+		if err := needPerson("logging in"); err != nil {
+			return err
 		}
 		if *apiID != "" || *apiHash != "" {
 			// Parsed here rather than by the flag, so a hash pasted in the
@@ -101,7 +118,7 @@ and tg will ask for them here.`
 				return err
 			}
 		}
-		if _, err := config.LoadCredentials(); err != nil && os.Getenv("TG_TEST_DC") == "" {
+		if _, err := config.LoadCredentials(); errors.Is(err, config.ErrNoCredentials) && os.Getenv("TG_TEST_DC") == "" {
 			fmt.Fprintln(os.Stderr, "Telegram API credentials are needed once. Create them at https://my.telegram.org/apps")
 			id, err := p.ask(ctx, "API ID", "")
 			if err != nil {
@@ -119,24 +136,50 @@ and tg will ask for them here.`
 				return err
 			}
 		}
-		user, err := mtp.Login(ctx, mtp.Options{Version: a.version}, p)
+		user, err := mtp.Login(ctx, mtp.Options{Account: account, Version: a.version}, p)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "Logged in as %s\n", user.Name)
-		return a.printUser(user)
+		return a.loggedIn(account, user)
 	}
 	return c
+}
+
+// loggedIn records a fresh login in the configuration and reports it. The
+// first account becomes the default, later ones never take that over.
+func (a *app) loggedIn(account string, user core.User) error {
+	var current string
+	err := config.Update(func(f *config.File) error {
+		// Only the very first account becomes the default. A file that
+		// names none already has one: "default".
+		if len(f.Accounts) == 0 && f.Account == "" {
+			f.Account = account
+		}
+		f.Ensure(account).User = &config.User{ID: user.ID, Name: user.Name, Username: user.Username}
+		current = f.Default()
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Logged in as %s (account %q)\n", user.Name, account)
+	if current != account {
+		fmt.Fprintf(os.Stderr, "The default account is still %q. Use this one with --account %s, or run `tg accounts use %s`.\n", current, account, account)
+	}
+	return a.printUser(user)
 }
 
 func (a *app) logoutCmd() *command {
 	c := a.newCommand("logout", "End the session and delete it from this machine", 0, 0)
 	c.run = func(ctx context.Context, _ []string) error {
-		if err := mtp.Logout(ctx, mtp.Options{Version: a.version}); err != nil {
+		account, cfg, err := a.active()
+		if err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stderr, "Logged out")
-		return nil
+		if cfg.Accounts[account] == nil {
+			return core.ErrNotLoggedIn
+		}
+		return a.logout(ctx, account)
 	}
 	return c
 }
