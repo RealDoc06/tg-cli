@@ -94,6 +94,9 @@ type EventKind string
 const (
 	EventMessage EventKind = "message"
 	EventEdit    EventKind = "edit"
+	// EventReady is sent once, when the subscription is live: every message
+	// from then on is reported. It carries no chat or message.
+	EventReady EventKind = "ready"
 )
 
 // Event is a live update. Chat describes the chat the message belongs to, so
@@ -118,12 +121,15 @@ type Backend interface {
 	History(ctx context.Context, chatID int64, q HistoryQuery) ([]Message, error)
 	Send(ctx context.Context, chatID int64, req SendRequest) (Message, error)
 	MarkRead(ctx context.Context, chatID int64, maxID int) error
+	// CreateGroup makes a new group with only the account in it.
+	CreateGroup(ctx context.Context, title string) (Chat, error)
 	Search(ctx context.Context, q SearchQuery) ([]Message, error)
 	// Avatar returns the encoded profile photo of a chat (JPEG or PNG).
 	Avatar(ctx context.Context, chat Chat) ([]byte, error)
 	// Download saves the media of a message into dir and returns the file path.
 	Download(ctx context.Context, chatID int64, msgID int, dir string) (string, error)
-	// Watch blocks and reports live events until ctx is done.
+	// Watch blocks and reports live events until ctx is done, starting with
+	// an EventReady. No other event is delivered while fn handles that one.
 	Watch(ctx context.Context, fn func(Event)) error
 }
 

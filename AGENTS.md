@@ -32,6 +32,8 @@ scripts/build-release.sh v0.0.0     # cross compile every platform into dist/
 - Front ends only talk to `core.Backend`. Anything new the UI needs from Telegram goes through that interface and gets a demo implementation.
 - Do not add dependencies that use `text/template` or `reflect.Value.MethodByName` (cobra does). They disable the linker's dead code elimination and the binary grows from 20 MB to 50 MB, because gotd's generated API is huge.
 - Chat IDs follow the Bot API convention everywhere outside `internal/mtp`.
+- `internal/cli/guide.txt` is how agents learn the tool. Any change to a command, flag or output format updates it in the same PR.
+- Errors say what to do next, like "no chat matches, find it with `tg chats -q <text>`".
 - Reading never marks messages as read unless asked. Sending by title only matches chats in the chat list.
 - No continuously repainting animations in the TUI (spinners, blinking).
 - Tests are focused on behavior that can break. No smoke tests.

@@ -17,7 +17,7 @@ func run(t *testing.T, args ...string) error {
 	t.Setenv("TG_DEMO", "1")
 	t.Setenv("TG_NO_AUTOUPDATE", "1")
 	t.Setenv("TG_CLI_HOME", t.TempDir())
-	null, err := os.Open(os.DevNull)
+	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,6 +35,8 @@ func TestNegativeChatIDsAreArguments(t *testing.T) {
 		{"read", "-1001000000201", "-n", "2"},
 		{"read", "-n", "2", "-202"},
 		{"send", "-202", "hello"},
+		{"search", "backups", "-c", "-1001000000201"},
+		{"search", "backups", "--chat", "-1001000000201", "--json"},
 	} {
 		if err := run(t, args...); err != nil {
 			t.Errorf("tg %s: %v", strings.Join(args, " "), err)
@@ -72,5 +74,22 @@ func TestMessageLine(t *testing.T) {
 		if got := messageLine(msg); got != want {
 			t.Errorf("messageLine = %q, want %q", got, want)
 		}
+	}
+}
+
+// watch --after must hand over what arrived before it started, or an agent
+// that reads and then waits loses the messages in between.
+func TestWatchAfterCatchesUp(t *testing.T) {
+	// Alice's demo messages 4 and 5 are newer than 3: both count, no waiting.
+	if err := run(t, "watch", "alice", "--after", "3", "--count", "2", "--timeout", "5s"); err != nil {
+		t.Errorf("catching up on two messages: %v", err)
+	}
+	// Nothing is newer than 5, so the wait has to run out.
+	err := run(t, "watch", "alice", "--after", "5", "--count", "1", "--timeout", "200ms")
+	if err == nil || !strings.Contains(err.Error(), "0 of 1") {
+		t.Errorf("waiting past the newest message: %v", err)
+	}
+	if err := run(t, "watch", "--after", "3"); !errors.As(err, new(errUsage)) {
+		t.Errorf("--after without a chat: %v", err)
 	}
 }

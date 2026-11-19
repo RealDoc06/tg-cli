@@ -5,6 +5,7 @@ package cli
 import (
 	"cmp"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -14,8 +15,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
@@ -69,6 +72,12 @@ func (c *command) help() string {
 	return b.String()
 }
 
+// guide is the briefing printed by `tg guide`, and by a bare `tg` when it is
+// not run from a terminal, which is how an agent usually meets the tool.
+//
+//go:embed guide.txt
+var guide string
+
 const intro = `tg gives agents and scripts read and write access to a Telegram account,
 and gives humans a terminal client. Run it bare for the TUI.
 
@@ -77,10 +86,11 @@ title, or "me" for Saved Messages.`
 
 func rootHelp(commands []*command) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\nUsage:\n  tg                    open the TUI\n  tg <command> [flags]\n\nCommands:\n", intro)
+	fmt.Fprintf(&b, "%s\n\nAgents: run `tg guide` first, it is the short version of everything here.\n\nUsage:\n  tg                    open the TUI\n  tg <command> [flags]\n\nCommands:\n", intro)
 	for _, c := range commands {
-		fmt.Fprintf(&b, "  %-11s %s\n", c.name(), c.short)
+		fmt.Fprintf(&b, "  %-12s %s\n", c.name(), c.short)
 	}
+	fmt.Fprintf(&b, "  %-12s %s\n", "guide", "How an agent should use tg, start here")
 	b.WriteString("\nFlags:\n      --json      print one JSON object per line\n  -h, --help      show help, also per command\n  -v, --version   show the version\n")
 	return b.String()
 }
@@ -94,15 +104,23 @@ func Main(version string) int {
 	defer stop()
 
 	a := &app{version: version}
+	started := time.Now()
 	err := a.dispatch(ctx, os.Args[1:])
+	code := exitCode(ctx, err)
+	logInvocation(os.Args[1:], started, code, err)
+	if err != nil && code != 130 {
+		fmt.Fprintln(os.Stderr, "tg:", err)
+	}
+	return code
+}
+
+func exitCode(ctx context.Context, err error) int {
 	switch {
 	case err == nil:
 		return 0
 	case errors.Is(ctx.Err(), context.Canceled):
 		return 130 // interrupted, nothing to report
-	}
-	fmt.Fprintln(os.Stderr, "tg:", err)
-	if errors.As(err, new(errUsage)) {
+	case errors.As(err, new(errUsage)):
 		return 2
 	}
 	return 1
@@ -111,7 +129,7 @@ func Main(version string) int {
 func (a *app) dispatch(ctx context.Context, args []string) error {
 	commands := []*command{
 		a.loginCmd(), a.logoutCmd(), a.meCmd(), a.chatsCmd(), a.readCmd(), a.sendCmd(),
-		a.searchCmd(), a.markReadCmd(), a.downloadCmd(), a.watchCmd(), a.updateCmd(),
+		a.searchCmd(), a.markReadCmd(), a.createGroupCmd(), a.downloadCmd(), a.watchCmd(), a.updateCmd(),
 	}
 
 	// Flags before the command name belong to tg itself.
@@ -133,9 +151,12 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	case *help || (len(args) == 1 && args[0] == "help"):
 		fmt.Print(rootHelp(commands))
 		return nil
+	case len(args) == 1 && args[0] == "guide":
+		fmt.Print(guide)
+		return nil
 	case len(args) == 0:
 		if !term.IsTerminal(int(os.Stdout.Fd())) {
-			fmt.Print(rootHelp(commands))
+			fmt.Print(guide)
 			return nil
 		}
 		selfupdate.AutoCheck(a.version)
@@ -150,7 +171,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	}
 	i := slices.IndexFunc(commands, func(c *command) bool { return c.name() == name })
 	if i < 0 {
-		return errUsage{fmt.Errorf("unknown command %q, see `tg help`", name)}
+		return errUsage{fmt.Errorf("unknown command %q, see `tg guide`", name)}
 	}
 	cmd := commands[i]
 	// Group and channel IDs are negative numbers. Shield them so they are
@@ -168,12 +189,18 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	for i, arg := range positional {
 		positional[i] = strings.TrimPrefix(arg, shield)
 	}
+	// A shielded ID can also be the value of a flag, as in --chat -100123.
+	cmd.flags.Visit(func(f *pflag.Flag) {
+		if value, shielded := strings.CutPrefix(f.Value.String(), shield); shielded {
+			_ = f.Value.Set(value)
+		}
+	})
 	if h, _ := cmd.flags.GetBool("help"); h || wantHelp {
 		fmt.Print(cmd.help())
 		return nil
 	}
 	if n := cmd.flags.NArg(); n < cmd.minArgs || (cmd.maxArgs >= 0 && n > cmd.maxArgs) {
-		return errUsage{fmt.Errorf("usage: tg %s", cmd.use)}
+		return errUsage{fmt.Errorf("usage: tg %s, see `tg %s --help`", cmd.use, name)}
 	}
 	if name != "update" {
 		selfupdate.AutoCheck(a.version)
@@ -266,7 +293,10 @@ func (a *app) sendCmd() *command {
 	c := a.newCommand("send <chat> [text...]", "Send a message, text comes from the arguments or from stdin", 1, -1)
 	c.example = `  tg send @alice "on my way"
   tg send me --file report.pdf "today's report"
-  git log -5 --oneline | tg send "Dev Team"`
+  git log -5 --oneline | tg send "Dev Team"
+  tg send @alice <<'EOF'
+  several lines, "quotes" and $ signs arrive exactly as written
+  EOF`
 	var req core.SendRequest
 	c.flags.IntVar(&req.ReplyTo, "reply-to", 0, "message ID to reply to")
 	c.flags.StringVarP(&req.File, "file", "f", "", "file to attach, the text becomes its caption")
@@ -302,6 +332,10 @@ func (a *app) sendCmd() *command {
 
 func (a *app) searchCmd() *command {
 	c := a.newCommand("search <text...>", "Search messages everywhere or in one chat", 1, -1)
+	c.long = `Search messages in every chat, or in one with --chat. Telegram does the
+matching: by whole words and their beginnings and inflections, not by
+substring, so "introduce" also finds "introducing". Newest matches are kept
+when there are more than --limit.`
 	chatRef := c.flags.StringP("chat", "c", "", "search only in this chat")
 	limit := c.flags.IntP("limit", "n", 30, "maximum number of messages")
 	c.run = func(ctx context.Context, args []string) error {
@@ -318,6 +352,14 @@ func (a *app) searchCmd() *command {
 			msgs, err := be.Search(ctx, q)
 			if err != nil {
 				return err
+			}
+			if chat != nil {
+				for i := range msgs {
+					msgs[i].Chat = "" // the header already names the only chat
+				}
+			}
+			if !a.json && chat == nil {
+				fmt.Printf("# %d messages found\n", len(msgs))
 			}
 			return a.printMessages(chat, msgs)
 		})
@@ -338,6 +380,20 @@ func (a *app) markReadCmd() *command {
 				return err
 			}
 			return be.MarkRead(ctx, chat.ID, last[0].ID)
+		})
+	}
+	return c
+}
+
+func (a *app) createGroupCmd() *command {
+	c := a.newCommand("create-group <title...>", "Create a new group with only you in it", 1, -1)
+	c.run = func(ctx context.Context, args []string) error {
+		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
+			chat, err := be.CreateGroup(ctx, strings.Join(args, " "))
+			if err != nil {
+				return err
+			}
+			return a.printCreated(chat)
 		})
 	}
 	return c
@@ -370,36 +426,84 @@ func (a *app) watchCmd() *command {
 	c := a.newCommand("watch [chat...]", "Print new messages as they arrive", 0, -1)
 	c.long = `Print new and edited messages as they arrive, from every chat or only from
 the given ones. Runs until interrupted, or until --count or --timeout is hit,
-which is how an agent waits for a reply.`
-	c.example = `  tg watch @alice --count 1 --timeout 10m`
+which is how an agent waits for a reply.
+
+With --after, messages already newer than that ID are printed first, so
+nothing is lost between sending or reading and starting to watch.`
+	c.example = `  tg watch @alice --count 1 --timeout 10m
+  tg watch @alice --after 4521 --count 1 --timeout 10m`
 	count := c.flags.Int("count", 0, "stop after this many messages")
 	timeout := c.flags.Duration("timeout", 0, "stop after this long, for example 90s or 10m")
-	outgoing := c.flags.Bool("outgoing", false, "also print messages sent by this account")
+	after := c.flags.Int("after", 0, "first print what is already newer than this message ID (one chat only)")
+	outgoing := c.flags.Bool("outgoing", false, "also print messages sent from this account, by you or by anyone else using it")
 	c.run = func(ctx context.Context, args []string) error {
+		if *after > 0 && len(args) != 1 {
+			return errUsage{errors.New("--after needs exactly one chat")}
+		}
 		if *timeout > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, *timeout)
 			defer cancel()
 		}
-		var seen atomic.Int64
+		// skipped counts messages hidden for being sent from this account, so
+		// a wait that ran out can say why it saw nothing.
+		var seen, skipped atomic.Int64
 		err := a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			only := map[int64]bool{}
+			only := map[int64]core.Chat{}
 			for _, ref := range args {
 				chat, err := be.Resolve(ctx, ref)
 				if err != nil {
 					return err
 				}
-				only[chat.ID] = true
+				only[chat.ID] = chat
 			}
-			return be.Watch(ctx, func(ev core.Event) {
-				if (len(only) > 0 && !only[ev.Chat.ID]) || (ev.Message.Out && !*outgoing) || ctx.Err() != nil {
+
+			var mu sync.Mutex
+			newest := *after // highest message ID handled so far, used with --after
+			show := func(ev core.Event) {
+				mu.Lock()
+				defer mu.Unlock()
+				if _, wanted := only[ev.Chat.ID]; (len(only) > 0 && !wanted) || ctx.Err() != nil {
 					return
 				}
-				a.printEvent(ev)
+				if *after > 0 && ev.Kind == core.EventMessage {
+					if ev.Message.ID <= newest {
+						return // the backlog already covered it
+					}
+					newest = ev.Message.ID
+				}
+				if ev.Message.Out && !*outgoing {
+					skipped.Add(1)
+					return
+				}
+				if seen.Load() == 0 && !a.json {
+					fmt.Println(untrusted)
+				}
+				a.printEvent(ev, len(only) != 1)
 				if n := seen.Add(1); *count > 0 && n >= int64(*count) {
 					cancel()
+				}
+			}
+			return be.Watch(ctx, func(ev core.Event) {
+				if ev.Kind != core.EventReady {
+					show(ev)
+					return
+				}
+				// The subscription is live and holds back new messages
+				// until this returns: the moment to catch up.
+				for _, chat := range only {
+					if *after == 0 {
+						break
+					}
+					backlog, err := be.History(ctx, chat.ID, core.HistoryQuery{AfterID: *after, Limit: 100})
+					if err != nil {
+						fmt.Fprintln(os.Stderr, "tg: could not load earlier messages:", err)
+					}
+					for _, m := range backlog {
+						show(core.Event{Kind: core.EventMessage, Chat: chat, Message: m})
+					}
 				}
 			})
 		})
@@ -407,7 +511,11 @@ which is how an agent waits for a reply.`
 		// waiting for a number of messages that did not all arrive.
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			if n := seen.Load(); *count > 0 && n < int64(*count) {
-				return fmt.Errorf("timed out after %s with %d of %d messages", *timeout, n, *count)
+				hint := ""
+				if s := skipped.Load(); s > 0 {
+					hint = fmt.Sprintf("; skipped %d sent from this account, add --outgoing to see them (agents sharing the account all count as you)", s)
+				}
+				return fmt.Errorf("timed out after %s with %d of %d messages%s", *timeout, n, *count, hint)
 			}
 			return nil
 		}

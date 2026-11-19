@@ -221,6 +221,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		ev := core.Event(msg)
+		if ev.Kind == core.EventReady {
+			return m, nil
+		}
 		m.addMessage(ev.Message, &ev.Chat)
 		cmds := []tea.Cmd{m.afterMove()}
 		if ev.Message.ChatID == m.openID && !ev.Message.Out {

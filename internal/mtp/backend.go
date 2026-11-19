@@ -174,7 +174,7 @@ func (b *backend) Resolve(ctx context.Context, ref string) (core.Chat, error) {
 	}
 	switch len(matches) {
 	case 0:
-		return core.Chat{}, fmt.Errorf("no chat matches %q", ref)
+		return core.Chat{}, fmt.Errorf("no chat matches %q, find it with `tg chats -q <text>`", ref)
 	case 1:
 		return b.known(ctx, matches[0])
 	}
@@ -299,6 +299,30 @@ func (b *backend) MarkRead(ctx context.Context, chatID int64, maxID int) error {
 	}
 	_, err = b.api.MessagesReadHistory(ctx, &tg.MessagesReadHistoryRequest{Peer: peer, MaxID: maxID})
 	return err
+}
+
+// CreateGroup creates a supergroup, the only kind of group that can exist
+// with a single member.
+func (b *backend) CreateGroup(ctx context.Context, title string) (core.Chat, error) {
+	res, err := b.api.ChannelsCreateChannel(ctx, &tg.ChannelsCreateChannelRequest{Megagroup: true, Title: title})
+	if err != nil {
+		return core.Chat{}, err
+	}
+	var created []tg.ChatClass
+	switch u := res.(type) {
+	case *tg.Updates:
+		created = u.Chats
+	case *tg.UpdatesCombined:
+		created = u.Chats
+	}
+	e := tg.EntitiesFrom(nil, created)
+	b.peers.learn(e, b.self.ID)
+	for id := range e.Channels {
+		b.peers.markDialog(channelChatID(id))
+		chat, _ := b.peers.chat(channelChatID(id))
+		return chat, nil
+	}
+	return core.Chat{}, errors.New("Telegram did not return the new group")
 }
 
 func (b *backend) Search(ctx context.Context, q core.SearchQuery) ([]core.Message, error) {
@@ -439,7 +463,11 @@ func (b *backend) Watch(ctx context.Context, fn func(core.Event)) error {
 		return errors.New("client was opened without updates")
 	}
 	b.onEvent.Store(&fn)
-	err := b.gaps.Run(ctx, b.api, b.self.ID, updates.AuthOptions{})
+	// OnStart runs once the update state is loaded and before any update is
+	// handed out, which is exactly the EventReady contract.
+	err := b.gaps.Run(ctx, b.api, b.self.ID, updates.AuthOptions{
+		OnStart: func(context.Context) { fn(core.Event{Kind: core.EventReady}) },
+	})
 	if ctx.Err() != nil {
 		return nil
 	}
