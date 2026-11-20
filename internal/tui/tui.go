@@ -119,10 +119,10 @@ type (
 		err error
 	}
 	editedMsg struct {
-		chatID     int64
-		id         int
-		from, text string // the text as the edit was sent, and the new one
-		err        error
+		chatID int64
+		id     int
+		text   string
+		err    error
 	}
 	avatarMsg struct {
 		chatID int64
@@ -197,7 +197,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.menu = nil // it was placed for the old size
-		return m, m.afterMove()
+		return m, tea.Batch(m.afterMove(), m.afterScroll())
 
 	case tea.KeyPressMsg:
 		return m, m.key(msg)
@@ -314,17 +314,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.SetValue(msg.text)
 				m.input.CursorEnd()
 				m.revealMessage(msg.id)
+				return m, m.afterScroll()
 			}
-			return m, m.afterScroll()
+			return m, nil
 		}
-		// Apply the edit where the message still holds the text it replaced:
-		// a newer edit from another app may have arrived first.
+		// Results and live updates share one connection, in the order Telegram
+		// applied them: an edit from another app that arrived before this
+		// result was overwritten by it.
 		if h := m.histories[msg.chatID]; h != nil {
-			if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.id }); i >= 0 && h.msgs[i].Text == msg.from {
+			if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.id }); i >= 0 {
 				h.msgs[i].Text, h.msgs[i].Edited = msg.text, true
 			}
 		}
-		if c := m.chat(msg.chatID); c != nil && c.Last != nil && c.Last.ID == msg.id && c.Last.Text == msg.from {
+		if c := m.chat(msg.chatID); c != nil && c.Last != nil && c.Last.ID == msg.id {
 			last := *c.Last
 			last.Text, last.Edited = msg.text, true
 			c.Last = &last
@@ -517,14 +519,10 @@ func (m *model) submit() tea.Cmd {
 			m.cancelDraft()
 			return nil
 		}
-		// What the message says now, which the result replaces only if no
-		// newer edit arrives first.
-		current, _ := m.message(editing)
-		from := current.Text
 		m.saving[chatID]++
 		m.cancelDraft()
 		return func() tea.Msg {
-			return editedMsg{chatID, editing, from, text, m.be.Edit(m.ctx, chatID, editing, text)}
+			return editedMsg{chatID, editing, text, m.be.Edit(m.ctx, chatID, editing, text)}
 		}
 	}
 	if text == "" {
@@ -701,7 +699,9 @@ func (m *model) setFocus(f focus) tea.Cmd {
 	m.filter.Blur()
 	switch f {
 	case focusInput:
-		return m.input.Focus()
+		// A narrow terminal shows the conversation again: re-clamp what
+		// changed while it was hidden.
+		return tea.Batch(m.input.Focus(), m.afterScroll())
 	case focusFilter:
 		return m.filter.Focus()
 	}
