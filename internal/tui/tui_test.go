@@ -201,16 +201,16 @@ func TestLongErrorIsShown(t *testing.T) {
 // A loaded photo is drawn in place of its "[photo]" label, as placeholder
 // cells that keep every row at the width of the terminal.
 func TestPhotoIsDrawnInTheConversation(t *testing.T) {
-	m := loaded(t, 120, 30)
+	m := loaded(t, 120, 50)
 	m.graphics = true
 	open(t, m, 1) // Homelab, with one photo
 	m.images = map[imageKey]shown{}
-	upload(m, m.loadPhotos())
+	upload(m, m.loadPictures())
 
 	var photo shown
-	for key, img := range m.images {
-		if key.msg != 0 {
-			photo = img
+	for _, msg := range m.histories[m.openID].msgs {
+		if msg.Media == core.MediaPhoto {
+			photo = m.images[imageKey{msg.ChatID, msg.ID}]
 		}
 	}
 	if photo.id == 0 || photo.cols > photoCols || photo.rows > photoRows {
@@ -219,7 +219,7 @@ func TestPhotoIsDrawnInTheConversation(t *testing.T) {
 	rows := strings.Split(m.View().Content, "\n")
 	drawn := 0
 	for i, row := range rows {
-		if strings.ContainsRune(row, '\U0010EEEE') {
+		if strings.Contains(row, fmt.Sprintf("\x1b[38;5;%dm\U0010EEEE", photo.id)) {
 			drawn++
 		}
 		if w := ansi.StringWidth(row); w != 120 {
@@ -231,6 +231,38 @@ func TestPhotoIsDrawnInTheConversation(t *testing.T) {
 	}
 	if strings.Contains(ansi.Strip(m.View().Content), "Marco: [photo]") {
 		t.Error("the label is still shown next to the photo")
+	}
+}
+
+// A sticker replaces its label at sticker size. A video stays labeled, since
+// the label tells its length, and is drawn below it.
+func TestStickerAndVideoAreDrawn(t *testing.T) {
+	cases := []struct {
+		chat       int
+		label      string
+		cols, rows int
+		keepsLabel bool
+	}{
+		{2, "[sticker 😄]", stickerCols, stickerRows, false},  // Bob Chen
+		{4, "[sticker ❤️]", stickerCols, stickerRows, false}, // Chiara, animated
+		{1, "[video 0:02]", photoCols, photoRows, true},      // Homelab
+	}
+	for _, c := range cases {
+		m := loaded(t, narrowWidth-4, 40) // only the conversation shows
+		m.graphics = true
+		open(t, m, c.chat)
+		m.images = map[imageKey]shown{}
+		upload(m, m.loadPictures())
+
+		h := m.histories[m.openID]
+		last := h.msgs[len(h.msgs)-1]
+		img := m.images[imageKey{last.ChatID, last.ID}]
+		if img.id == 0 || img.cols > c.cols || img.rows > c.rows {
+			t.Errorf("%s is drawn as %+v", c.label, img)
+		}
+		if got := strings.Contains(ansi.Strip(m.View().Content), c.label); got != c.keepsLabel {
+			t.Errorf("%s: label shown = %v, want %v", c.label, got, c.keepsLabel)
+		}
 	}
 }
 
@@ -348,7 +380,7 @@ func TestPhotoLoadKeepsTheView(t *testing.T) {
 		lines := m.messageLines(h, rw)
 		photo := slices.IndexFunc(lines, func(l msgLine) bool { return l.msg >= 0 && h.msgs[l.msg].Media == core.MediaPhoto })
 		m.scroll = len(lines) - rows - (photo - 1) // the photo is the second line in view
-		load := m.loadPhotos()
+		load := m.loadPictures()
 		if above {
 			m.scroll = len(lines) - rows - (photo + 1) // the photo is just above the view
 		}

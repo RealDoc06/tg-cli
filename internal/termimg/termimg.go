@@ -2,6 +2,8 @@
 // protocol with Unicode placeholders (Kitty, Ghostty). An image is transmitted
 // once with Transmit, then shown anywhere by printing the text returned by
 // Placeholder, which makes it safe to use inside a cell based TUI renderer.
+// Animations are played by the terminal itself, see Play: the TUI never
+// redraws for them.
 package termimg
 
 import (
@@ -14,12 +16,14 @@ import (
 	"image/png"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
+	_ "golang.org/x/image/webp" // stickers and their thumbnails
 )
 
 // Supported reports whether the terminal can show placeholder images. It is
@@ -84,25 +88,47 @@ func Placeholder(id, cols, rows int) []string {
 // Transmit returns the escape sequence that uploads PNG data as image id and
 // creates the virtual placement the placeholder cells refer to.
 func Transmit(id, cols, rows int, pngData []byte) string {
+	var b strings.Builder
+	upload(&b, fmt.Sprintf("f=100,a=T,U=1,q=2,i=%d,c=%d,r=%d", id, cols, rows), pngData)
+	return b.String()
+}
+
+// Play returns the sequence that appends PNG frames to image id, after the
+// one Transmit uploaded, and has the terminal loop through all of them, each
+// shown for gap. It is empty without frames. Terminals that cannot animate
+// keep showing the first frame.
+func Play(id int, gap time.Duration, frames [][]byte) string {
+	if len(frames) == 0 {
+		return ""
+	}
+	ms := max(1, gap.Milliseconds())
+	var b strings.Builder
+	for _, frame := range frames {
+		upload(&b, fmt.Sprintf("a=f,f=100,q=2,i=%d,z=%d", id, ms), frame)
+	}
+	// The first frame's gap, then run in an endless loop (v=1).
+	b.WriteString(passthrough(fmt.Sprintf("\x1b_Ga=a,q=2,i=%d,r=1,z=%d,s=3,v=1\x1b\\", id, ms)))
+	return b.String()
+}
+
+// upload writes a graphics command carrying PNG data, cut in chunks: only
+// the first one carries the keys.
+func upload(b *strings.Builder, keys string, pngData []byte) {
 	const chunk = 4096
 	enc := base64.StdEncoding.EncodeToString(pngData)
-	var b strings.Builder
 	for first := true; first || enc != ""; first = false {
 		n := min(chunk, len(enc))
 		more := 0
 		if n < len(enc) {
 			more = 1
 		}
-		var seq string
 		if first {
-			seq = fmt.Sprintf("\x1b_Gf=100,a=T,U=1,q=2,i=%d,c=%d,r=%d,m=%d;%s\x1b\\", id, cols, rows, more, enc[:n])
+			b.WriteString(passthrough(fmt.Sprintf("\x1b_G%s,m=%d;%s\x1b\\", keys, more, enc[:n])))
 		} else {
-			seq = fmt.Sprintf("\x1b_Gm=%d;%s\x1b\\", more, enc[:n])
+			b.WriteString(passthrough(fmt.Sprintf("\x1b_Gm=%d;%s\x1b\\", more, enc[:n])))
 		}
-		b.WriteString(passthrough(seq))
 		enc = enc[n:]
 	}
-	return b.String()
 }
 
 // DeleteAll returns the sequence that frees every image this process uploaded.

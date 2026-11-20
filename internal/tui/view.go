@@ -365,7 +365,7 @@ type msgLine struct {
 }
 
 // messageLines lays the history out for a pane of width w: a date line per
-// day, then "HH:MM Name: text" wrapped with a hanging indent, and the photo
+// day, then "HH:MM Name: text" wrapped with a hanging indent, and the picture
 // below when it is loaded. Spaced, a gap sets apart a new sender or a pause,
 // and each day; otherwise messages are packed. Gaps and dates belong to no
 // message. The message being replied to or edited is marked.
@@ -406,14 +406,14 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 		if msg.Out {
 			name = m.st.accent.Render("You")
 		}
-		// A photo that is drawn replaces its "[photo]" label, unless the
-		// pane became too narrow for it.
-		photo := m.images[imageKey{msg.ChatID, msg.ID}]
-		if msg.Media != core.MediaPhoto || photo.cols > w-indent-1 {
-			photo = shown{}
+		// A picture that is drawn replaces its "[photo]" label, unless the
+		// pane became too narrow for it. A video keeps it for its duration.
+		pic := m.images[imageKey{msg.ChatID, msg.ID}]
+		if msg.Picture == core.NoPicture || pic.cols > w-indent-1 {
+			pic = shown{}
 		}
 		body := msg.Text
-		if msg.Media != "" && photo.id == 0 {
+		if msg.Media != "" && (pic.id == 0 || msg.Picture == core.PictureVideo) {
 			body = strings.TrimSpace(m.st.muted.Render("["+msg.Media+"]") + " " + body)
 		}
 		text := strings.TrimSpace(name + ": " + body)
@@ -431,8 +431,8 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 			}
 			lines = append(lines, msgLine{prefix + l, i})
 		}
-		if photo.id != 0 {
-			for _, l := range termimg.Placeholder(photo.id, photo.cols, photo.rows) {
+		if pic.id != 0 {
+			for _, l := range termimg.Placeholder(pic.id, pic.cols, pic.rows) {
 				lines = append(lines, msgLine{padded + l, i})
 			}
 		}

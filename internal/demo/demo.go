@@ -6,7 +6,9 @@ package demo
 import (
 	"bytes"
 	"cmp"
+	"compress/gzip"
 	"context"
+	_ "embed"
 	"fmt"
 	"image"
 	"image/color"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	"github.com/RealDoc06/tg-cli/internal/core"
+	"github.com/RealDoc06/tg-cli/internal/lottie"
 )
 
 // Backend implements core.Backend over fixture data.
@@ -67,12 +70,14 @@ var fixtures = []fixture{
 		"95||I'll move the media VM back tonight",
 		"40|Giulia|ping me if you need a hand with the migration",
 		"22|Marco|backups finished, 412 GB in 38 minutes",
+		"21|Marco|[video 0:02]",
 	}},
 	{core.Chat{ID: 102, Kind: core.KindUser, Title: "Bob Chen", Username: "bobchen", PhotoID: 3}, []string{
 		"1500|Bob Chen|pushed the fix for the flaky test",
 		"1490||thanks, reviewing now",
 		"1440||merged",
 		"75|Bob Chen|release went out without issues 🎉",
+		"74|Bob Chen|[sticker 😄]",
 	}},
 	{core.Chat{ID: -1001000000202, Kind: core.KindChannel, Title: "Go Weekly", Username: "goweekly", Unread: 1, PhotoID: 4}, []string{
 		"10080|Go Weekly|Issue 571: range over func in practice",
@@ -82,6 +87,7 @@ var fixtures = []fixture{
 		"2900|Chiara Bianchi|sent you the invoice",
 		"2890||got it, paying today",
 		"205|Chiara Bianchi|received, thank you!",
+		"204|Chiara Bianchi|[sticker ❤️]",
 	}},
 	{core.Chat{ID: -202, Kind: core.KindGroup, Title: "Family", PhotoID: 5}, []string{
 		"4000|Mamma|dinner on Sunday?",
@@ -127,6 +133,7 @@ func New() *Backend {
 			}
 			if media, ok := strings.CutPrefix(m.Text, "["); ok {
 				m.Media, m.Text = strings.TrimSuffix(media, "]"), ""
+				m.Picture = pictureKind(m.Media)
 			}
 			b.nextID++
 			b.messages[f.chat.ID] = append(b.messages[f.chat.ID], m)
@@ -213,7 +220,7 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 	}
 	switch {
 	case photo != nil:
-		m.Media = core.MediaPhoto
+		m.Media, m.Picture = core.MediaPhoto, core.PicturePhoto
 		b.photos[m.ID] = photo
 	case req.File != "":
 		m.Media = "file: " + filepath.Base(req.File)
@@ -312,18 +319,84 @@ func (b *Backend) Avatar(_ context.Context, chat core.Chat) ([]byte, error) {
 	})
 }
 
-// Photo returns what was sent as a photo, or paints a landscape: a sky, a sun
-// and hills, different for every message.
-func (b *Backend) Photo(_ context.Context, chatID int64, msgID int) ([]byte, error) {
+// The clips of the demo video sticker and video, with their stills, were made
+// with ffmpeg's geq filter: a bouncing face as VP9 with transparency, the
+// format of video stickers, and a sunset as H.264. The animated sticker is
+// Lottie written by hand.
+var (
+	//go:embed media/sticker.webm
+	stickerClip []byte
+	//go:embed media/sticker.webp
+	stickerStill []byte
+	//go:embed media/video.mp4
+	videoClip []byte
+	//go:embed media/video.jpg
+	videoStill []byte
+	//go:embed media/heart.json
+	heartJSON []byte
+)
+
+// heart is the animated sticker as Telegram serves it: gzipped Lottie (TGS)
+// with a small still.
+var heart = sync.OnceValues(func() (core.Picture, error) {
+	var tgs bytes.Buffer
+	zw := gzip.NewWriter(&tgs)
+	if _, err := zw.Write(heartJSON); err != nil {
+		return core.Picture{}, err
+	}
+	if err := zw.Close(); err != nil {
+		return core.Picture{}, err
+	}
+	anim, err := lottie.Parse(heartJSON)
+	if err != nil {
+		return core.Picture{}, err
+	}
+	var still bytes.Buffer
+	err = png.Encode(&still, anim.Render(anim.In, 128, 128))
+	return core.Picture{Still: still.Bytes(), Clip: tgs.Bytes()}, err
+})
+
+// pictureKind tells how fixture media is drawn, from its label.
+func pictureKind(media string) core.PictureKind {
+	switch {
+	case media == core.MediaPhoto:
+		return core.PicturePhoto
+	case strings.HasPrefix(media, "sticker"):
+		return core.PictureSticker
+	case strings.HasPrefix(media, "video"):
+		return core.PictureVideo
+	}
+	return core.NoPicture
+}
+
+// Picture returns a demo sticker or the video, what was sent as a photo, or
+// paints a landscape: a sky, a sun and hills, different for every message.
+func (b *Backend) Picture(_ context.Context, chatID int64, msgID int) (core.Picture, error) {
 	b.mu.Lock()
 	sent, ok := b.photos[msgID]
+	var kind core.PictureKind
+	var media string
+	for _, m := range b.messages[chatID] {
+		if m.ID == msgID {
+			kind, media = m.Picture, m.Media
+		}
+	}
 	b.mu.Unlock()
-	if ok {
-		return sent, nil
+	switch {
+	case ok:
+		return core.Picture{Still: sent}, nil
+	case media == "sticker ❤️":
+		return heart()
+	case kind == core.PictureSticker:
+		return core.Picture{Still: stickerStill, Clip: stickerClip}, nil
+	case kind == core.PictureVideo:
+		return core.Picture{Still: videoStill, Clip: videoClip}, nil
+	case kind == core.NoPicture:
+		return core.Picture{}, fmt.Errorf("message %d has nothing to draw", msgID)
 	}
 	const w, h = 640, 420
 	hue := float64(msgID) * 67
-	return paint(w, h, func(x, y float64) color.NRGBA {
+	still, err := paint(w, h, func(x, y float64) color.NRGBA {
 		hill := h*0.62 + math.Sin(x/w*5+float64(msgID))*h*0.06
 		switch {
 		case y > hill:
@@ -334,6 +407,7 @@ func (b *Backend) Photo(_ context.Context, chatID int64, msgID int) ([]byte, err
 			return hsl(hue+200, 0.6, 0.45+y/h*0.35)
 		}
 	})
+	return core.Picture{Still: still}, err
 }
 
 // paint encodes a w x h PNG whose pixels come from at.

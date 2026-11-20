@@ -131,14 +131,19 @@ func TestMediaSummary(t *testing.T) {
 	file := &tg.MessageMediaDocument{Document: &tg.Document{Attributes: []tg.DocumentAttributeClass{
 		&tg.DocumentAttributeFilename{FileName: "report.pdf"},
 	}}}
+	// A video sticker carries video attributes too, often listed first.
+	videoSticker := &tg.MessageMediaDocument{Document: &tg.Document{Attributes: []tg.DocumentAttributeClass{
+		&tg.DocumentAttributeVideo{Duration: 3}, &tg.DocumentAttributeSticker{Alt: "😪"},
+	}}}
 	cases := map[string]tg.MessageMediaClass{
 		"":                 nil,
 		"photo":            &tg.MessageMediaPhoto{},
 		"voice 1:12":       voice,
 		"file: report.pdf": file,
+		"sticker 😪":        videoSticker,
 	}
 	for want, media := range cases {
-		if got := mediaSummary(media); got != want {
+		if got, _ := mediaSummary(media); got != want {
 			t.Errorf("mediaSummary(%T) = %q, want %q", media, got, want)
 		}
 	}

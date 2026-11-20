@@ -52,10 +52,34 @@ type Message struct {
 	ReplyTo int       `json:"reply_to,omitempty"`
 	Edited  bool      `json:"edited,omitempty"`
 	Service bool      `json:"service,omitempty"`
+	// Picture tells whether and how the TUI can draw the media.
+	Picture PictureKind `json:"-"`
 }
 
 // MediaPhoto is the Media of a message that carries a photo.
 const MediaPhoto = "photo"
+
+// PictureKind tells how the media of a message is drawn.
+type PictureKind uint8
+
+const (
+	NoPicture PictureKind = iota
+	// PicturePhoto is a photo or a GIF, drawn in place of its label.
+	PicturePhoto
+	// PictureSticker is drawn smaller than a photo, in place of its label.
+	PictureSticker
+	// PictureVideo is drawn under its label, which keeps the duration.
+	PictureVideo
+)
+
+// Picture is what can be drawn of a message's media. Still is an encoded
+// image (JPEG, PNG or WebP). Clip, when set, is a short muted video (MP4 or
+// WebM) or an animated sticker (TGS) that plays in its place; the still
+// stands in when it cannot.
+type Picture struct {
+	Still []byte
+	Clip  []byte
+}
 
 // User is the logged in account.
 type User struct {
@@ -149,9 +173,10 @@ type Backend interface {
 	Search(ctx context.Context, q SearchQuery) ([]Message, error)
 	// Avatar returns the encoded profile photo of a chat (JPEG or PNG).
 	Avatar(ctx context.Context, chat Chat) ([]byte, error)
-	// Photo returns the encoded photo of a message (JPEG or PNG), at a size
-	// meant for display rather than the original.
-	Photo(ctx context.Context, chatID int64, msgID int) ([]byte, error)
+	// Picture returns what to draw for the media of a message, at a size
+	// meant for display rather than the original. It is only asked for
+	// messages whose Picture is not NoPicture.
+	Picture(ctx context.Context, chatID int64, msgID int) (Picture, error)
 	// Download saves the media of a message into dir and returns the file path.
 	Download(ctx context.Context, chatID int64, msgID int, dir string) (string, error)
 	// Watch blocks and reports live events until ctx is done, starting with

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -36,6 +37,8 @@ const (
 	avatarPx    = 96
 	photoCols   = 36 // largest photo in a conversation, in cells
 	photoRows   = 14
+	stickerCols = 16 // largest sticker, in cells
+	stickerRows = 8
 	narrowWidth = 70 // below this only one pane is shown at a time
 )
 
@@ -129,7 +132,7 @@ type menuItem struct {
 	run   func(m *model, msg core.Message) tea.Cmd
 }
 
-// imageKey names a picture: the photo of a message, or the avatar of a chat
+// imageKey names a picture: the media of a message, or the avatar of a chat
 // when msg is 0.
 type imageKey struct {
 	chat int64
@@ -159,11 +162,13 @@ type (
 		msg core.Message
 		err error
 	}
-	// imageMsg carries a picture ready to upload, png is nil when it could
+	// imageMsg carries a picture ready to upload as PNG frames, more than
+	// one for an animation, each shown for gap. frames is nil when it could
 	// not be loaded.
 	imageMsg struct {
 		key        imageKey
-		png        []byte
+		frames     [][]byte
+		gap        time.Duration
 		cols, rows int
 	}
 	// uploadedMsg follows the upload of a picture to the terminal.
@@ -265,11 +270,11 @@ func (m *model) Init() tea.Cmd {
 	)
 }
 
-// Update handles a message, then fetches the photos that came into view,
+// Update handles a message, then fetches the pictures that came into view,
 // whatever moved them there.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := m.update(msg)
-	return m, tea.Batch(cmd, m.loadPhotos())
+	return m, tea.Batch(cmd, m.loadPictures())
 }
 
 func (m *model) update(msg tea.Msg) tea.Cmd {
@@ -442,8 +447,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return tea.Batch(cmds...)
 
 	case imageMsg:
-		if msg.png == nil {
-			return nil // stays 0, initials or "[photo]" are shown
+		if msg.frames == nil {
+			return nil // stays 0, initials or the "[photo]" label are shown
 		}
 		m.lastImage = m.lastImage%termimg.MaxID + 1
 		for key, img := range m.images {
@@ -452,10 +457,11 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 		}
 		// The picture is shown only once it reached the terminal: placeholder
-		// cells drawn before their image may stay blank.
+		// cells drawn before their image may stay blank. An animation plays
+		// in the terminal from then on, without redraws.
 		img := shown{m.lastImage, msg.cols, msg.rows}
 		return tea.Sequence(
-			tea.Raw(termimg.Transmit(img.id, img.cols, img.rows, msg.png)),
+			tea.Raw(termimg.Transmit(img.id, img.cols, img.rows, msg.frames[0])+termimg.Play(img.id, msg.gap, msg.frames[1:])),
 			func() tea.Msg { return uploadedMsg{msg.key, img} },
 		)
 
@@ -1021,8 +1027,11 @@ func (m *model) afterMove() tea.Cmd {
 			// No photo: the initials badge, drawn as an image so they center.
 			bg, fg := m.st.peer(chat.ID), m.st.theme.Background
 			cmds = append(cmds, func() tea.Msg {
-				png, _ := termimg.Initials(initials(chat.Title), bg, fg, avatarPx)
-				return imageMsg{key, png, avatarCols, avatarRows}
+				png, err := termimg.Initials(initials(chat.Title), bg, fg, avatarPx)
+				if err != nil {
+					return imageMsg{key: key}
+				}
+				return imageMsg{key: key, frames: [][]byte{png}, cols: avatarCols, rows: avatarRows}
 			})
 			continue
 		}
@@ -1031,16 +1040,28 @@ func (m *model) afterMove() tea.Cmd {
 			if err != nil {
 				return imageMsg{key: key}
 			}
-			png, _ := termimg.Avatar(data, avatarPx)
-			return imageMsg{key, png, avatarCols, avatarRows}
+			png, err := termimg.Avatar(data, avatarPx)
+			if err != nil {
+				return imageMsg{key: key}
+			}
+			return imageMsg{key: key, frames: [][]byte{png}, cols: avatarCols, rows: avatarRows}
 		})
 	}
 	return tea.Batch(cmds...)
 }
 
-// loadPhotos requests the photos of the messages on screen in the open chat,
-// sized to fit the conversation pane as it is now.
-func (m *model) loadPhotos() tea.Cmd {
+// pictureBox is the most cells a picture of this kind may cover.
+func pictureBox(kind core.PictureKind) (cols, rows int) {
+	if kind == core.PictureSticker {
+		return stickerCols, stickerRows
+	}
+	return photoCols, photoRows
+}
+
+// loadPictures requests the pictures of the messages on screen in the open
+// chat, sized to fit the conversation pane as it is now. A clip that ffmpeg
+// can decode plays, otherwise its still is shown.
+func (m *model) loadPictures() tea.Cmd {
 	h := m.histories[m.openID]
 	_, rw := m.layout()
 	if !m.graphics || h == nil || rw == 0 {
@@ -1048,32 +1069,39 @@ func (m *model) loadPhotos() tea.Cmd {
 	}
 	lines := m.messageLines(h, rw)
 	start, end, _, _ := m.shown(len(lines))
-	maxCols := min(photoCols, rw-photoIndent-1)
-	if maxCols < 1 {
-		return nil // no room for a photo, its label is shown
-	}
 	var cmds []tea.Cmd
 	for _, l := range lines[start:end] {
-		if l.msg < 0 || h.msgs[l.msg].Media != core.MediaPhoto {
+		if l.msg < 0 || h.msgs[l.msg].Picture == core.NoPicture {
 			continue
 		}
 		msg := h.msgs[l.msg]
+		boxCols, boxRows := pictureBox(msg.Picture)
+		maxCols := min(boxCols, rw-photoIndent-1)
+		if maxCols < 1 {
+			continue // no room for a picture, its label is shown
+		}
 		key := imageKey{msg.ChatID, msg.ID}
-		// A photo sized for a wider pane is fetched again to fit.
+		// A picture sized for a wider pane is fetched again to fit.
 		if img, seen := m.images[key]; seen && img.cols <= maxCols {
 			continue
 		}
 		m.images[key] = shown{}
 		cmds = append(cmds, func() tea.Msg {
-			data, err := m.be.Photo(m.ctx, key.chat, key.msg)
+			pic, err := m.be.Picture(m.ctx, key.chat, key.msg)
 			if err != nil {
 				return imageMsg{key: key}
 			}
-			png, cols, rows, err := termimg.Fit(data, maxCols, photoRows)
+			png, cols, rows, err := termimg.Fit(pic.Still, maxCols, boxRows)
 			if err != nil {
 				return imageMsg{key: key}
 			}
-			return imageMsg{key, png, cols, rows}
+			out := imageMsg{key: key, frames: [][]byte{png}, cols: cols, rows: rows}
+			if pic.Clip != nil {
+				if frames, gap, err := termimg.Frames(m.ctx, pic.Clip, cols, rows); err == nil {
+					out.frames, out.gap = frames, gap
+				}
+			}
+			return out
 		})
 	}
 	return tea.Batch(cmds...)
@@ -1155,7 +1183,7 @@ func (m *model) addMessage(msg core.Message, chat *core.Chat, edit bool) {
 	if h := m.histories[msg.ChatID]; h != nil && h.loaded {
 		if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.ID }); i >= 0 {
 			h.msgs[i] = msg
-			delete(m.images, imageKey{msg.ChatID, msg.ID}) // an edit can replace the photo
+			delete(m.images, imageKey{msg.ChatID, msg.ID}) // an edit can replace the media
 		} else if !edit && (h.done || len(h.msgs) == 0 || msg.ID > h.msgs[0].ID) {
 			// By ID, which is the order Telegram gave them, whatever order
 			// they arrive in. One older than the whole loaded page is left

@@ -269,12 +269,12 @@ func (b *backend) Send(ctx context.Context, chatID int64, req core.SendRequest) 
 	var res tg.UpdatesClass
 	switch {
 	case req.Photo != nil:
-		sent.Media = core.MediaPhoto
+		sent.Media, sent.Picture = core.MediaPhoto, core.PicturePhoto
 		res, err = builder.Upload(message.FromBytes("photo.png", req.Photo)).Photo(ctx, caption...)
 	case req.File == "":
 		res, err = builder.Text(ctx, req.Text)
 	case core.IsPhotoFile(req.File):
-		sent.Media = core.MediaPhoto
+		sent.Media, sent.Picture = core.MediaPhoto, core.PicturePhoto
 		res, err = builder.Upload(message.FromPath(req.File)).Photo(ctx, caption...)
 	default:
 		sent.Media = "file: " + filepath.Base(req.File)
@@ -391,24 +391,78 @@ func (b *backend) Avatar(ctx context.Context, chat core.Chat) ([]byte, error) {
 	return data, nil
 }
 
-// photoDisplaySize is the smallest side, in pixels, Photo looks for: enough
-// for a sharp picture across half a terminal on a high density screen.
+// photoDisplaySize is the smallest side, in pixels, Picture looks for:
+// enough for a sharp picture across half a terminal on a high density screen.
 const photoDisplaySize = 800
 
-func (b *backend) Photo(ctx context.Context, chatID int64, msgID int) ([]byte, error) {
+// Clips past these limits show only their still: they cost a download and
+// frames the terminal keeps in memory. A GIF plays whatever its length.
+const (
+	clipMaxBytes   = 4 << 20
+	clipMaxSeconds = 6
+)
+
+func (b *backend) Picture(ctx context.Context, chatID int64, msgID int) (core.Picture, error) {
 	media, err := b.media(ctx, chatID, msgID)
 	if err != nil {
-		return nil, err
+		return core.Picture{}, err
 	}
-	m, ok := media.(*tg.MessageMediaPhoto)
-	if !ok {
-		return nil, fmt.Errorf("message %d has no photo", msgID)
+	switch m := media.(type) {
+	case *tg.MessageMediaPhoto:
+		photo, ok := m.Photo.(*tg.Photo)
+		if !ok {
+			return core.Picture{}, errors.New("photo is no longer available")
+		}
+		still, err := b.fetchImage(ctx, photoFile(photo, thumbSize(photo.Sizes, photoDisplaySize)))
+		return core.Picture{Still: still}, err
+	case *tg.MessageMediaDocument:
+		if doc, ok := m.Document.(*tg.Document); ok {
+			return b.documentPicture(ctx, doc)
+		}
 	}
-	photo, ok := m.Photo.(*tg.Photo)
-	if !ok {
-		return nil, errors.New("photo is no longer available")
+	return core.Picture{}, fmt.Errorf("message %d has nothing to draw", msgID)
+}
+
+// documentPicture fetches the still of a sticker, GIF or video: the file
+// itself for a static sticker, its thumbnail otherwise, plus the file as a
+// clip when it is short enough to play.
+func (b *backend) documentPicture(ctx context.Context, doc *tg.Document) (core.Picture, error) {
+	at := func(size string) *tg.InputDocumentFileLocation {
+		return &tg.InputDocumentFileLocation{ID: doc.ID, AccessHash: doc.AccessHash, FileReference: doc.FileReference, ThumbSize: size}
 	}
-	return b.fetchImage(ctx, photoLocation(photo, photoDisplaySize))
+	if doc.MimeType == "image/webp" {
+		still, err := b.fetchImage(ctx, at(""))
+		return core.Picture{Still: still}, err
+	}
+	thumb := thumbSize(doc.Thumbs, 0)
+	if thumb == "" {
+		return core.Picture{}, errors.New("file has no preview")
+	}
+	still, err := b.fetchImage(ctx, at(thumb))
+	if err != nil {
+		return core.Picture{}, err
+	}
+	pic := core.Picture{Still: still}
+	if playable(doc) {
+		pic.Clip, _ = b.fetchImage(ctx, at("")) // the still stands in without it
+	}
+	return pic, nil
+}
+
+// playable reports whether a document is a clip to play in place of its
+// still: an animated or video sticker, a GIF, or a short video.
+func playable(doc *tg.Document) bool {
+	if doc.Size > clipMaxBytes {
+		return false
+	}
+	a := attrsOf(doc)
+	switch {
+	case a.sticker != nil:
+		return doc.MimeType == "video/webm" || doc.MimeType == "application/x-tgsticker"
+	case a.animated:
+		return true
+	}
+	return a.video != nil && a.video.Duration <= clipMaxSeconds
 }
 
 // fetchImage downloads a small file into memory, a few at a time.
@@ -426,12 +480,13 @@ func (b *backend) fetchImage(ctx context.Context, location tg.InputFileLocationC
 	return buf.Bytes(), nil
 }
 
-// photoLocation picks the smallest size of a photo whose longest side reaches
-// want pixels, or the largest one when none does. want 0 means the largest.
-// Sizes are listed from small to large.
-func photoLocation(photo *tg.Photo, want int) *tg.InputPhotoFileLocation {
+// thumbSize picks the smallest size whose longest side reaches want pixels,
+// or the largest one when none does, and returns its type. want 0 means the
+// largest. Sizes are listed from small to large. It is "" when there is no
+// size to download.
+func thumbSize(sizes []tg.PhotoSizeClass, want int) string {
 	var size string
-	for _, s := range photo.Sizes {
+	for _, s := range sizes {
 		var typ string
 		var w, h int
 		switch s := s.(type) {
@@ -447,6 +502,11 @@ func photoLocation(photo *tg.Photo, want int) *tg.InputPhotoFileLocation {
 			break
 		}
 	}
+	return size
+}
+
+// photoFile is the location of one size of a photo.
+func photoFile(photo *tg.Photo, size string) *tg.InputPhotoFileLocation {
 	return &tg.InputPhotoFileLocation{ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference, ThumbSize: size}
 }
 
@@ -493,7 +553,7 @@ func (b *backend) Download(ctx context.Context, chatID int64, msgID int, dir str
 		if !ok {
 			return "", errors.New("photo is no longer available")
 		}
-		location = photoLocation(photo, 0)
+		location = photoFile(photo, thumbSize(photo.Sizes, 0))
 		name = fmt.Sprintf("photo_%d.jpg", msgID)
 	case *tg.MessageMediaDocument:
 		doc, ok := media.Document.(*tg.Document)

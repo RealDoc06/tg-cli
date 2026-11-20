@@ -16,8 +16,9 @@ func (b *backend) message(raw tg.MessageClass, e tg.Entities) (core.Message, boo
 		out := core.Message{
 			ID: m.ID, ChatID: chatIDOf(m.PeerID), Out: m.Out,
 			Date: time.Unix(int64(m.Date), 0), Text: m.Message,
-			Media: mediaSummary(m.Media), Edited: m.EditDate != 0 && !m.EditHide,
+			Edited: m.EditDate != 0 && !m.EditHide,
 		}
+		out.Media, out.Picture = mediaSummary(m.Media)
 		if reply, ok := m.ReplyTo.(*tg.MessageReplyHeader); ok && !reply.ForumTopic {
 			out.ReplyTo = reply.ReplyToMsgID
 		}
@@ -69,57 +70,83 @@ func (b *backend) author(from, chat tg.PeerClass, out bool, e tg.Entities) (int6
 	return id, fmt.Sprint(id)
 }
 
-// mediaSummary names the attachment of a message in a few words.
-func mediaSummary(media tg.MessageMediaClass) string {
+// mediaSummary names the attachment of a message in a few words and tells
+// how it can be drawn.
+func mediaSummary(media tg.MessageMediaClass) (string, core.PictureKind) {
 	switch m := media.(type) {
 	case nil, *tg.MessageMediaEmpty, *tg.MessageMediaWebPage:
-		return ""
+		return "", core.NoPicture
 	case *tg.MessageMediaPhoto:
-		return core.MediaPhoto
+		return core.MediaPhoto, core.PicturePhoto
 	case *tg.MessageMediaDocument:
 		doc, ok := m.Document.(*tg.Document)
 		if !ok {
-			return "file"
+			return "file", core.NoPicture
 		}
 		return documentSummary(doc)
 	case *tg.MessageMediaGeo, *tg.MessageMediaGeoLive, *tg.MessageMediaVenue:
-		return "location"
+		return "location", core.NoPicture
 	case *tg.MessageMediaContact:
-		return "contact: " + m.FirstName + " " + m.PhoneNumber
+		return "contact: " + m.FirstName + " " + m.PhoneNumber, core.NoPicture
 	case *tg.MessageMediaPoll:
-		return "poll"
+		return "poll", core.NoPicture
 	case *tg.MessageMediaDice:
-		return fmt.Sprintf("dice %s %d", m.Emoticon, m.Value)
+		return fmt.Sprintf("dice %s %d", m.Emoticon, m.Value), core.NoPicture
 	case *tg.MessageMediaStory:
-		return "story"
+		return "story", core.NoPicture
 	}
-	return "media"
+	return "media", core.NoPicture
 }
 
-func documentSummary(doc *tg.Document) string {
-	summary := "file"
+// docAttrs gathers the attributes of a document, which come in any order.
+type docAttrs struct {
+	sticker  *tg.DocumentAttributeSticker
+	animated bool
+	video    *tg.DocumentAttributeVideo
+	audio    *tg.DocumentAttributeAudio
+	name     string
+}
+
+func attrsOf(doc *tg.Document) docAttrs {
+	var a docAttrs
 	for _, attr := range doc.Attributes {
-		switch a := attr.(type) {
+		switch attr := attr.(type) {
 		case *tg.DocumentAttributeSticker:
-			return "sticker " + a.Alt
+			a.sticker = attr
 		case *tg.DocumentAttributeAnimated:
-			return "gif"
+			a.animated = true
 		case *tg.DocumentAttributeVideo:
-			kind := "video"
-			if a.RoundMessage {
-				kind = "video message"
-			}
-			return kind + " " + clock(a.Duration)
+			a.video = attr
 		case *tg.DocumentAttributeAudio:
-			if a.Voice {
-				return "voice " + clock(float64(a.Duration))
-			}
-			return "audio " + clock(float64(a.Duration))
+			a.audio = attr
 		case *tg.DocumentAttributeFilename:
-			summary = "file: " + a.FileName
+			a.name = attr.FileName
 		}
 	}
-	return summary
+	return a
+}
+
+// documentSummary names a document by what it is: a video sticker also
+// carries video attributes, a GIF is a video flagged as animated.
+func documentSummary(doc *tg.Document) (string, core.PictureKind) {
+	a := attrsOf(doc)
+	switch {
+	case a.sticker != nil:
+		return "sticker " + a.sticker.Alt, core.PictureSticker
+	case a.animated:
+		return "gif", core.PicturePhoto
+	case a.video != nil && a.video.RoundMessage:
+		return "video message " + clock(a.video.Duration), core.PictureVideo
+	case a.video != nil:
+		return "video " + clock(a.video.Duration), core.PictureVideo
+	case a.audio != nil && a.audio.Voice:
+		return "voice " + clock(float64(a.audio.Duration)), core.NoPicture
+	case a.audio != nil:
+		return "audio " + clock(float64(a.audio.Duration)), core.NoPicture
+	case a.name != "":
+		return "file: " + a.name, core.NoPicture
+	}
+	return "file", core.NoPicture
 }
 
 func clock(seconds float64) string {

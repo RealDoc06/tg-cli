@@ -3,7 +3,7 @@
 # Markdown that embeds them, ready to paste into a pull request description.
 # Keeping them on their own branch keeps binary files out of main's history.
 #
-# Usage: scripts/shot-publish.sh <file.png>...
+# Usage: scripts/shot-publish.sh <file.png|file.gif>...
 set -euo pipefail
 
 [ $# -gt 0 ] || { echo "usage: shot-publish.sh <file.png>..." >&2; exit 2; }
@@ -22,6 +22,7 @@ for file in "$@"; do
   gh api -X PUT "repos/$repo/contents/shots/$name" \
     -f message="screenshot: $name" -f branch="$branch" \
     -F content=@"${TMPDIR:-/tmp}/shot-publish.b64" >/dev/null
-  echo "![$(basename "$file" .png)](https://raw.githubusercontent.com/$repo/$branch/shots/$name)"
+  alt=$(basename "$file")
+  echo "![${alt%.*}](https://raw.githubusercontent.com/$repo/$branch/shots/$name)"
 done
 rm -f "${TMPDIR:-/tmp}/shot-publish.b64"
