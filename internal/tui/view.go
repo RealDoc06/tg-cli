@@ -239,11 +239,13 @@ func (m *model) chatRow(c *core.Chat, selected bool, w int) []string {
 		badge = m.st.accent.Bold(true).Render(fmt.Sprint(c.Unread))
 	}
 
+	// The selection bar's column on the left is mirrored by a margin on the
+	// right, so the row sits centered in the sidebar.
 	avatar := m.avatar(c)
-	text := w - 1 - avatarCols - 1
+	text := w - 1 - avatarCols - 1 - 1
 	return []string{
-		bar + avatar[0] + " " + spread(title, stamp, text),
-		bar + avatar[1] + " " + spread(m.st.muted.Render(preview), badge, text),
+		bar + avatar[0] + " " + spread(title, stamp, text) + " ",
+		bar + avatar[1] + " " + spread(m.st.muted.Render(preview), badge, text) + " ",
 	}
 }
 
