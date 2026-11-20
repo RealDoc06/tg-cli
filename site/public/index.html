@@ -541,6 +541,9 @@ copyButton.addEventListener('click', async () => {
   const command = document.getElementById('install-cmd');
   resetCopy();
   const attempt = copyAttempt;
+  // Selected first, so one more gesture copies it when the write fails or is dropped:
+  // uBlock Origin's ClickFix filter resolves writeText without writing for `irm ... | iex`.
+  getSelection().selectAllChildren(command);
   let copied = true;
   try {
     await navigator.clipboard.writeText(command.textContent);
@@ -549,8 +552,7 @@ copyButton.addEventListener('click', async () => {
   }
   if (attempt !== copyAttempt) return; // a newer click or another system took over
   if (!copied) {
-    // No clipboard access (plain http, old webview): select it so one more gesture copies.
-    getSelection().selectAllChildren(command);
+    // No clipboard access (plain http, old webview).
     copyStatus.textContent = 'Command selected. Copy it with your keyboard.';
     return;
   }
