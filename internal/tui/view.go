@@ -38,7 +38,18 @@ const (
 // chatsDrawn is how many chats fit in the list, possibly none. listRows is
 // the same at least one, for paging and keeping the selection in view.
 func (m *model) chatsDrawn() int { return max(0, (m.height-1)/chatStride) }
-func (m *model) listRows() int   { return max(1, m.chatsDrawn()) }
+
+func (m *model) listRows() int { return max(1, m.chatsDrawn()) }
+
+// conversationWidth is the width of the conversation pane, also while a
+// narrow terminal shows the chat list instead.
+func (m *model) conversationWidth() int {
+	if m.width < narrowWidth {
+		return m.width
+	}
+	_, rw := m.layout()
+	return rw
+}
 
 // The conversation pane is, top to bottom: the title and a gap, the messages,
 // a gap, the reply or edit being written when there is one, and the composer.
@@ -365,7 +376,7 @@ type msgLine struct {
 }
 
 // messageLines lays the history out for a pane of width w: a date line per
-// day, then "HH:MM Name: text" wrapped with a hanging indent, and the photo
+// day, then "HH:MM Name: text" wrapped with a hanging indent, and the picture
 // below when it is loaded. Spaced, a gap sets apart a new sender or a pause,
 // and each day; otherwise messages are packed. Gaps and dates belong to no
 // message. The message being replied to or edited is marked.
@@ -406,14 +417,14 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 		if msg.Out {
 			name = m.st.accent.Render("You")
 		}
-		// A photo that is drawn replaces its "[photo]" label, unless the
-		// pane became too narrow for it.
-		photo := m.images[imageKey{msg.ChatID, msg.ID}]
-		if msg.Media != core.MediaPhoto || photo.cols > w-indent-1 {
-			photo = shown{}
+		// A picture that is drawn replaces its "[photo]" label, unless the
+		// pane became too narrow for it. A video keeps it for its duration.
+		pic := m.images[imageKey{msg.ChatID, msg.ID}]
+		if msg.Picture == core.NoPicture || pic.cols > w-indent-1 {
+			pic = shown{}
 		}
 		body := msg.Text
-		if msg.Media != "" && photo.id == 0 {
+		if msg.Media != "" && (pic.id == 0 || msg.Picture == core.PictureVideo) {
 			body = strings.TrimSpace(m.st.muted.Render("["+msg.Media+"]") + " " + body)
 		}
 		text := strings.TrimSpace(name + ": " + body)
@@ -431,8 +442,8 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 			}
 			lines = append(lines, msgLine{prefix + l, i})
 		}
-		if photo.id != 0 {
-			for _, l := range termimg.Placeholder(photo.id, photo.cols, photo.rows) {
+		if pic.id != 0 {
+			for _, l := range termimg.Placeholder(pic.id, pic.cols, pic.rows) {
 				lines = append(lines, msgLine{padded + l, i})
 			}
 		}

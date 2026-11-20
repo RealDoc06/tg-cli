@@ -201,16 +201,16 @@ func TestLongErrorIsShown(t *testing.T) {
 // A loaded photo is drawn in place of its "[photo]" label, as placeholder
 // cells that keep every row at the width of the terminal.
 func TestPhotoIsDrawnInTheConversation(t *testing.T) {
-	m := loaded(t, 120, 30)
+	m := loaded(t, 120, 50)
 	m.graphics = true
 	open(t, m, 1) // Homelab, with one photo
 	m.images = map[imageKey]shown{}
-	upload(m, m.loadPhotos())
+	upload(m, m.loadPictures())
 
 	var photo shown
-	for key, img := range m.images {
-		if key.msg != 0 {
-			photo = img
+	for _, msg := range m.histories[m.openID].msgs {
+		if msg.Media == core.MediaPhoto {
+			photo = m.images[imageKey{msg.ChatID, msg.ID}]
 		}
 	}
 	if photo.id == 0 || photo.cols > photoCols || photo.rows > photoRows {
@@ -219,7 +219,7 @@ func TestPhotoIsDrawnInTheConversation(t *testing.T) {
 	rows := strings.Split(m.View().Content, "\n")
 	drawn := 0
 	for i, row := range rows {
-		if strings.ContainsRune(row, '\U0010EEEE') {
+		if strings.Contains(row, fmt.Sprintf("\x1b[38;5;%dm\U0010EEEE", photo.id)) {
 			drawn++
 		}
 		if w := ansi.StringWidth(row); w != 120 {
@@ -231,6 +231,38 @@ func TestPhotoIsDrawnInTheConversation(t *testing.T) {
 	}
 	if strings.Contains(ansi.Strip(m.View().Content), "Marco: [photo]") {
 		t.Error("the label is still shown next to the photo")
+	}
+}
+
+// A sticker replaces its label at sticker size. A video stays labeled, since
+// the label tells its length, and is drawn below it.
+func TestStickerAndVideoAreDrawn(t *testing.T) {
+	cases := []struct {
+		chat       int
+		label      string
+		cols, rows int
+		keepsLabel bool
+	}{
+		{2, "[sticker 😄]", stickerCols, stickerRows, false},  // Bob Chen
+		{4, "[sticker ❤️]", stickerCols, stickerRows, false}, // Chiara, animated
+		{1, "[video 0:02]", photoCols, photoRows, true},      // Homelab
+	}
+	for _, c := range cases {
+		m := loaded(t, narrowWidth-4, 40) // only the conversation shows
+		m.graphics = true
+		open(t, m, c.chat)
+		m.images = map[imageKey]shown{}
+		upload(m, m.loadPictures())
+
+		h := m.histories[m.openID]
+		last := h.msgs[len(h.msgs)-1]
+		img := m.images[imageKey{last.ChatID, last.ID}]
+		if img.id == 0 || img.cols > c.cols || img.rows > c.rows {
+			t.Errorf("%s is drawn as %+v", c.label, img)
+		}
+		if got := strings.Contains(ansi.Strip(m.View().Content), c.label); got != c.keepsLabel {
+			t.Errorf("%s: label shown = %v, want %v", c.label, got, c.keepsLabel)
+		}
 	}
 }
 
@@ -348,7 +380,7 @@ func TestPhotoLoadKeepsTheView(t *testing.T) {
 		lines := m.messageLines(h, rw)
 		photo := slices.IndexFunc(lines, func(l msgLine) bool { return l.msg >= 0 && h.msgs[l.msg].Media == core.MediaPhoto })
 		m.scroll = len(lines) - rows - (photo - 1) // the photo is the second line in view
-		load := m.loadPhotos()
+		load := m.loadPictures()
 		if above {
 			m.scroll = len(lines) - rows - (photo + 1) // the photo is just above the view
 		}
@@ -747,5 +779,139 @@ func TestEditWaitsForTheClipboard(t *testing.T) {
 	m.startEdit(own)
 	if m.editing != 0 || m.status != waitClipboard {
 		t.Errorf("edit started during a clipboard read: editing %d, status %q", m.editing, m.status)
+	}
+}
+
+// Animations take megabytes in the terminal, which drops pictures on its own
+// past its quota. The TUI frees the oldest first, so it knows they are gone
+// and loads them again when they come back into view.
+func TestOldestPicturesAreFreedPastTheBudget(t *testing.T) {
+	m := loaded(t, 120, 30)
+	big := imageBudget / 3
+	for i := 1; i <= 4; i++ {
+		key := imageKey{1, i}
+		m.update(uploadedMsg{key, shown{id: i, cols: 4, rows: 2, bytes: big, seq: m.loading(key)}})
+	}
+	if _, kept := m.images[imageKey{1, 1}]; kept {
+		t.Error("the oldest picture is still counted on")
+	}
+	for i := 2; i <= 4; i++ {
+		if _, kept := m.images[imageKey{1, i}]; !kept {
+			t.Errorf("picture %d was freed too", i)
+		}
+	}
+	if m.imageBytes != 3*big {
+		t.Errorf("%d bytes counted, want %d", m.imageBytes, 3*big)
+	}
+	if !slices.Contains(m.free, 1) {
+		t.Error("the oldest picture stays in the terminal")
+	}
+}
+
+// An edit can replace the media of a message, so its picture is freed and
+// loaded again. A load from before the edit must not land on top.
+func TestEditedPictureIsFreed(t *testing.T) {
+	m := loaded(t, 120, 50)
+	m.graphics = true
+	open(t, m, 1) // Homelab, with a photo
+	h := m.histories[m.openID]
+	photo := h.msgs[slices.IndexFunc(h.msgs, func(msg core.Message) bool { return msg.Media == core.MediaPhoto })]
+	key := imageKey{photo.ChatID, photo.ID}
+	m.images = map[imageKey]shown{}
+	m.imageBytes = 0
+	upload(m, m.loadPictures())
+	old := m.images[key]
+	if old.id == 0 || m.imageBytes < old.bytes {
+		t.Fatalf("photo is %+v, %d bytes counted", old, m.imageBytes)
+	}
+	before := m.imageBytes
+
+	m.update(eventMsg(core.Event{Kind: core.EventEdit, Message: photo}))
+	if _, seen := m.images[key]; seen || m.imageBytes != before-old.bytes || !slices.Contains(m.free, old.id) {
+		t.Errorf("after the edit: %+v, %d bytes counted, freeing %v", m.images[key], m.imageBytes, m.free)
+	}
+
+	// A load started before the edit finishes after it.
+	seq := m.loading(key)
+	m.loading(key) // the load the edit started
+	m.update(imageMsg{key: key, seq: seq, frames: [][]byte{{1}}, cols: 4, rows: 2})
+	if m.images[key].id != 0 {
+		t.Error("an outdated picture landed")
+	}
+}
+
+// Leaving a chat stops loading its pictures, and they load again on return.
+func TestLeavingAChatStopsItsPictures(t *testing.T) {
+	m := loaded(t, 120, 30)
+	m.graphics = true
+	open(t, m, 1)
+	left := m.view
+	open(t, m, 0)
+	if left.Err() == nil {
+		t.Fatal("the pictures of the chat left still load")
+	}
+	key := imageKey{1, 1}
+	m.images[key] = shown{}
+	m.update(imageMsg{key: key, retry: true})
+	if _, seen := m.images[key]; seen {
+		t.Error("a stopped picture would never load again")
+	}
+}
+
+// A new picture never takes the ID of one still shown, nor one freed a
+// moment ago: its delete may reach the terminal after the new upload.
+func TestNewPicturesTakeFreeIDs(t *testing.T) {
+	m := loaded(t, 120, 30)
+	m.images = map[imageKey]shown{}
+	for id := 1; id <= 3; id++ {
+		m.images[imageKey{1, id}] = shown{id: id}
+	}
+	m.freedAt[4] = time.Now()
+	if id := m.nextImage(); id != 5 {
+		t.Errorf("took ID %d, want 5", id)
+	}
+}
+
+// On a narrow terminal the chat list hides the conversation. Pictures in it
+// stay protected from eviction, and the user comes back to the same lines.
+func TestHiddenConversationKeepsItsPictures(t *testing.T) {
+	m := loaded(t, narrowWidth-4, 30)
+	m.graphics = true
+	open(t, m, 1) // Homelab, with a photo and a video
+	m.images = map[imageKey]shown{}
+	m.imageBytes = 0
+	m.scroll = 2
+	upload(m, m.loadPictures())
+	reading := func() string {
+		h := m.histories[m.openID]
+		lines := m.messageLines(h, m.conversationWidth())
+		start, end, _, _ := m.shown(len(lines))
+		var text []string
+		for _, l := range lines[start:end] {
+			text = append(text, l.text)
+		}
+		return strings.Join(text, "\n")
+	}
+	var inView []imageKey
+	for key := range m.onScreen() {
+		if m.images[key].id != 0 && key.msg != 0 {
+			inView = append(inView, key)
+		}
+	}
+	if len(inView) == 0 {
+		t.Fatal("no picture in view")
+	}
+	before := reading()
+
+	m.setFocus(focusChats) // the list takes the screen
+	m.imageBytes += imageBudget
+	m.evict()
+	for _, key := range inView {
+		if m.images[key].id == 0 {
+			t.Errorf("picture %v was freed while hidden", key)
+		}
+	}
+	if reading() != before {
+		t.Error("the conversation moved while hidden")
 	}
 }

@@ -146,7 +146,7 @@ To send a picture, copy it and paste it into the composer, or press `ctrl+v`, or
 
 ### Pictures
 
-Profile pictures and photos in conversations are drawn in terminals that implement the Kitty graphics protocol with Unicode placeholders: [Kitty](https://sw.kovidgoyal.net/kitty/) and [Ghostty](https://ghostty.org). A chat without a photo gets a square badge with its initials. Elsewhere the badge is drawn with text, and photos show as `[photo]`. Inside tmux, pictures need `set -g allow-passthrough on`. Force them on or off with `TG_IMAGES=1` or `TG_IMAGES=0`.
+Profile pictures, photos, stickers and video previews are drawn in terminals that implement the Kitty graphics protocol with Unicode placeholders: [Kitty](https://sw.kovidgoyal.net/kitty/) and [Ghostty](https://ghostty.org). Animated stickers play in a loop, and with [ffmpeg](https://ffmpeg.org) installed so do video stickers, GIFs and videos up to 6 seconds, muted. Round video messages show their first frame. The terminal animates them on the GPU, and ffmpeg decodes videos on the GPU when it can. A chat without a photo gets a square badge with its initials. Elsewhere the badge is drawn with text, and media shows as `[photo]`, `[sticker 😄]` and so on. Inside tmux, pictures need `set -g allow-passthrough on`. Force them on or off with `TG_IMAGES=1` or `TG_IMAGES=0`.
 
 ## Updates
 

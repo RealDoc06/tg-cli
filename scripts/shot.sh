@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Takes a PNG screenshot of tg running in a real terminal (kitty, headless
 # under Xvfb), so pull requests show what a change looks like, images included.
+# An output ending in .gif records 3 seconds instead, for animations.
 # Always runs against the demo data (TG_DEMO=1) so no real chat can leak.
 #
 # Usage: scripts/shot.sh <out.png> [--size WxH] [--key K]... [--text T]... [--action A]... -- <command> [';;' <command>]...
@@ -96,5 +97,9 @@ done
 sleep 1.5
 
 mkdir -p "$(dirname "$out")"
-ffmpeg -loglevel error -y -f x11grab -video_size "$size" -i "$display" -frames:v 1 "$out"
+case $out in
+  *.gif) ffmpeg -loglevel error -y -f x11grab -framerate 15 -video_size "$size" -t 3 -i "$display" \
+    -vf "split[a][b];[a]palettegen[p];[b][p]paletteuse" "$out" ;;
+  *) ffmpeg -loglevel error -y -f x11grab -video_size "$size" -i "$display" -frames:v 1 "$out" ;;
+esac
 echo "$out"

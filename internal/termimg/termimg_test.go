@@ -2,13 +2,18 @@ package termimg
 
 import (
 	"bytes"
+	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"image"
 	"image/color"
 	"image/png"
+	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -163,3 +168,92 @@ func TestInitialsAreCentered(t *testing.T) {
 }
 
 func abs(n int) int { return max(n, -n) }
+
+// Video stickers are VP9 with transparency, which only libvpx decodes: with
+// ffmpeg's own decoder they would show on an opaque square.
+func TestFramesKeepStickerTransparency(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	clip, err := os.ReadFile("../demo/media/sticker.webm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, gap, err := Frames(context.Background(), clip, 16, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) < 2 || gap <= 0 {
+		t.Fatalf("%d frames, %v apart", len(frames), gap)
+	}
+	img, err := png.Decode(bytes.NewReader(frames[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := img.Bounds()
+	if _, _, _, a := img.At(0, 0).RGBA(); a != 0 {
+		t.Error("corner is not transparent")
+	}
+	if _, _, _, a := img.At(b.Dx()/2, b.Dy()/2).RGBA(); a != 0xFFFF {
+		t.Error("center is not opaque")
+	}
+}
+
+// Play adds every frame to the image Transmit made, then starts a loop the
+// terminal runs on its own.
+func TestPlayAddsFramesAndLoops(t *testing.T) {
+	if Play(3, time.Second, nil) != "" {
+		t.Error("a still image is animated")
+	}
+	// The second frame spans several chunks, which must all say they carry
+	// a frame.
+	seq := Play(3, 50*time.Millisecond, [][]byte{{1}, bytes.Repeat([]byte{2}, 10000)})
+	commands := regexp.MustCompile(`\x1b_G([^;\x1b]*)`).FindAllStringSubmatch(seq, -1)
+	if len(commands) < 4 {
+		t.Fatalf("got %d commands", len(commands))
+	}
+	starts := 0
+	for _, c := range commands[:len(commands)-1] {
+		if !strings.HasPrefix(c[1], "a=f,") {
+			t.Errorf("frame chunk %q", c[1])
+		}
+		if strings.Contains(c[1], "i=3,") {
+			starts++
+			if !strings.Contains(c[1], "z=50") {
+				t.Errorf("frame without its gap: %q", c[1])
+			}
+		}
+	}
+	if starts != 2 {
+		t.Errorf("%d frames started, want 2", starts)
+	}
+	if loop := commands[len(commands)-1][1]; !strings.HasPrefix(loop, "a=a,") || !strings.Contains(loop, "s=3") || !strings.Contains(loop, "v=1") {
+		t.Errorf("loop command %q", loop)
+	}
+}
+
+// Animated stickers are gzipped Lottie, rendered here without ffmpeg.
+func TestFramesRenderAnimatedStickers(t *testing.T) {
+	src, err := os.ReadFile("../demo/media/heart.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tgs bytes.Buffer
+	zw := gzip.NewWriter(&tgs)
+	zw.Write(src)
+	zw.Close()
+	frames, _, err := Frames(context.Background(), tgs.Bytes(), 16, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) < 2 || bytes.Equal(frames[0], frames[len(frames)/2]) {
+		t.Fatalf("%d frames, not moving", len(frames))
+	}
+	img, err := png.Decode(bytes.NewReader(frames[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, a := img.At(0, 0).RGBA(); a != 0 {
+		t.Error("corner is not transparent")
+	}
+}
