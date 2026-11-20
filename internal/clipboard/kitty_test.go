@@ -16,9 +16,12 @@ func TestPasteEventPackets(t *testing.T) {
 	if list.Status != "DATA" || list.MIME != ListTypes || string(list.Data) != "text/plain\n" {
 		t.Errorf("type list: %+v", list)
 	}
-	want := "\x1b]5522;type=read:pw=c2VjcmV0MTIz:name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\x1b\\"
-	if got := ReadRequest("secret123", "Paste event", "text/plain"); got != want {
+	want := "\x1b]5522;type=read:id=7:pw=c2VjcmV0MTIz:name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\x1b\\"
+	if got := ReadRequest(7, "secret123", "Paste event", "text/plain"); got != want {
 		t.Errorf("request %q, want %q", got, want)
+	}
+	if p, _ := ParsePacket("\x1b]5522;type=read:status=DONE:id=7\x1b\\"); p.ID != 7 {
+		t.Errorf("reply id %d, want 7", p.ID)
 	}
 	if _, ok := ParsePacket("\x1b]52;c;aGk=\x1b\\"); ok {
 		t.Error("an OSC 52 reply was taken for OSC 5522")

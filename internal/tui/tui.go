@@ -86,11 +86,10 @@ type model struct {
 	// is current, enter waits: it would send what the read is replacing.
 	pasting int
 	// termClip is set when the terminal shares its clipboard (OSC 5522).
-	// reply is the answer it is sending, termSeq the attachSeq of the read
-	// it answers, termPW the password of this run's requests.
+	// reply is the answer it is sending, termPW the password of this run's
+	// requests.
 	termClip bool
 	reply    *termReply
-	termSeq  int
 	termPW   string
 
 	// images holds the pictures uploaded to the terminal. An entry with ID
@@ -364,7 +363,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			// No clipboard tools here, as over SSH: ask the terminal, which
 			// has the user's clipboard. It asks the user once per session.
 			m.startRead()
-			return tea.Raw(clipboard.ReadRequest(m.termPW, "tg", clipboard.ListTypes))
+			return tea.Raw(clipboard.ReadRequest(m.attachSeq, m.termPW, "tg", clipboard.ListTypes))
 		default:
 			m.status = msg.err.Error() // nothing pasted, any attachment stays as it was
 		}

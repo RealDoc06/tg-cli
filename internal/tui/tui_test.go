@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -399,36 +400,53 @@ func TestTerminalPasteAttachesImage(t *testing.T) {
 	m := loaded(t, 120, 30)
 	open(t, m, 1)
 	m.termClip = true
-	packet := func(meta, payload string) {
-		m.Update(uv.UnknownOscEvent("\x1b]5522;type=read:" + meta + ";" + base64.StdEncoding.EncodeToString([]byte(payload)) + "\x1b\\"))
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	packet := func(meta, payload string) tea.Cmd {
+		return m.update(uv.UnknownOscEvent("\x1b]5522;type=read:" + meta + ";" + b64(payload) + "\x1b\\"))
 	}
-	mime := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	// reply answers the request the terminal received, echoing its id.
+	reply := func(request tea.Cmd, mime string, chunks ...string) {
+		t.Helper()
+		if request == nil {
+			t.Fatal("nothing was requested")
+		}
+		id := regexp.MustCompile(`id=(\d+)`).FindStringSubmatch(fmt.Sprint(request()))[1]
+		packet("status=OK:id="+id, "")
+		for _, c := range chunks {
+			packet("status=DATA:id="+id+":mime="+b64(mime), c)
+		}
+		packet("status=DONE:id="+id, "")
+	}
 
-	packet("status=OK:pw="+mime("once"), "")
-	packet("status=DATA:mime="+mime("."), "image/png text/plain")
-	request := m.update(uv.UnknownOscEvent("\x1b]5522;type=read:status=DONE\x1b\\"))
-	if request == nil || !m.readingClipboard() {
-		t.Fatal("the image was not requested")
-	}
-	if raw := fmt.Sprint(request()); !strings.Contains(raw, mime("image/png")) || !strings.Contains(raw, mime("once")) {
+	// A paste event lists the types, tg asks for the image with its password.
+	packet("status=OK:pw="+b64("once"), "")
+	packet("status=DATA:mime="+b64("."), "image/png text/plain")
+	request := packet("status=DONE", "")
+	if raw := fmt.Sprint(request()); !strings.Contains(raw, b64("image/png")) || !strings.Contains(raw, b64("once")) {
 		t.Errorf("request %q does not ask for the image with the paste's password", raw)
 	}
-
-	packet("status=OK", "")
-	packet("status=DATA:mime="+mime("image/png"), "\x89PNG first chunk,")
-	packet("status=DATA:mime="+mime("image/png"), " second chunk")
-	packet("status=DONE", "")
+	reply(request, "image/png", "\x89PNG first chunk,", " second chunk")
 	if string(m.attach.Photo) != "\x89PNG first chunk, second chunk" || m.readingClipboard() {
 		t.Errorf("attached %q", m.attach.Photo)
 	}
 
 	packet("status=OK", "")
-	packet("status=DATA:mime="+mime("."), "text/plain")
-	packet("status=DONE", "")
-	packet("status=OK", "")
-	packet("status=DATA:mime="+mime("text/plain"), "hello")
-	packet("status=DONE", "")
+	packet("status=DATA:mime="+b64("."), "text/plain")
+	reply(packet("status=DONE", ""), "text/plain", "hello")
 	if m.input.Value() != "hello" {
 		t.Errorf("pasted text %q", m.input.Value())
+	}
+
+	// ctrl+v over SSH asks the terminal for its types. Cancelled with esc,
+	// its replies must not start a read or attach anything.
+	m.input.Reset()
+	m.setAttach(core.SendRequest{})
+	listing := m.update(clipboardMsg{seq: m.attachSeq, err: errors.New("no clipboard here")})
+	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
+	id := regexp.MustCompile(`id=(\d+)`).FindStringSubmatch(fmt.Sprint(listing()))[1]
+	packet("status=OK:id="+id, "")
+	packet("status=DATA:id="+id+":mime="+b64("."), "image/png")
+	if packet("status=DONE:id="+id, "") != nil || m.attached() {
+		t.Error("a cancelled ctrl+v went on reading the clipboard")
 	}
 }

@@ -3,6 +3,7 @@ package clipboard
 import (
 	"encoding/base64"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -34,6 +35,7 @@ var textTypes = []string{"text/plain;charset=utf-8", "text/plain", "UTF8_STRING"
 // EPERM.
 type Packet struct {
 	Status string
+	ID     int    // of the request it answers, 0 on paste events
 	MIME   string // of Data
 	PW     string // one-time password, on paste events
 	Data   []byte
@@ -57,6 +59,8 @@ func ParsePacket(seq string) (Packet, bool) {
 			read = value == "read"
 		case "status":
 			p.Status = value
+		case "id":
+			p.ID, _ = strconv.Atoi(value)
 		case "mime":
 			p.MIME = decode(value)
 		case "pw":
@@ -72,11 +76,12 @@ func ParsePacket(seq string) (Packet, bool) {
 }
 
 // ReadRequest asks the terminal for the clipboard data of one type, or for
-// the list of types with ListTypes. pw and name identify the request: the
-// one-time password of a paste event with "Paste event", or a password of
-// this run that the user can allow once for all requests.
-func ReadRequest(pw, name, mime string) string {
-	return "\x1b]5522;type=read:pw=" + encode(pw) + ":name=" + encode(name) + ";" + encode(mime) + "\x1b\\"
+// the list of types with ListTypes. The terminal tags every packet of its
+// reply with id. pw and name identify the request: the one-time password of
+// a paste event with "Paste event", or a password of this run that the user
+// can allow once for all requests.
+func ReadRequest(id int, pw, name, mime string) string {
+	return "\x1b]5522;type=read:id=" + strconv.Itoa(id) + ":pw=" + encode(pw) + ":name=" + encode(name) + ";" + encode(mime) + "\x1b\\"
 }
 
 // Pick chooses what to read from a list of types: a PNG image when images
