@@ -5,7 +5,6 @@ package tui
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/url"
@@ -85,12 +84,10 @@ type model struct {
 	// pasting is the attachSeq of the clipboard read in progress. While it
 	// is current, enter waits: it would send what the read is replacing.
 	pasting int
-	// termClip is set when the terminal shares its clipboard (OSC 5522).
-	// reply is the answer it is sending, termPW the password of this run's
-	// requests.
+	// termClip is set when the terminal reports pastes with their clipboard
+	// (OSC 5522), reply is the answer it is sending.
 	termClip bool
 	reply    *termReply
-	termPW   string
 
 	// images holds the pictures uploaded to the terminal. An entry with ID
 	// 0 is loading, or failed and shows as text.
@@ -191,7 +188,7 @@ func Run(ctx context.Context, be core.Backend, version, account, theme string) e
 // is not a theme falls back to the default and says so.
 func newModel(ctx context.Context, be core.Backend, theme string) *model {
 	t, ok := FindTheme(theme)
-	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}, termPW: rand.Text()}
+	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}}
 	if !ok {
 		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", theme, strings.Join(ThemeNames(), ", "))
 	}
@@ -360,10 +357,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		case msg.text != "":
 			return m.pasteText(msg.text) // no image, ctrl+v pastes text as before
 		case m.termClip && !errors.Is(msg.err, clipboard.ErrNoImage):
-			// No clipboard tools here, as over SSH: ask the terminal, which
-			// has the user's clipboard. It asks the user once per session.
-			m.startRead()
-			return tea.Raw(clipboard.ReadRequest(m.attachSeq, m.termPW, "tg", clipboard.ListTypes))
+			// No clipboard here, as over SSH. kitty's own paste brings the
+			// user's clipboard without asking, ctrl+v could only with a prompt.
+			m.status = "no clipboard here, paste the image with kitty's paste key (ctrl+shift+v)"
 		default:
 			m.status = msg.err.Error() // nothing pasted, any attachment stays as it was
 		}

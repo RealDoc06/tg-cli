@@ -437,16 +437,23 @@ func TestTerminalPasteAttachesImage(t *testing.T) {
 		t.Errorf("pasted text %q", m.input.Value())
 	}
 
-	// ctrl+v over SSH asks the terminal for its types. Cancelled with esc,
-	// its replies must not start a read or attach anything.
+	// A paste cancelled with esc before its data arrived attaches nothing.
 	m.input.Reset()
-	m.setAttach(core.SendRequest{})
-	listing := m.update(clipboardMsg{seq: m.attachSeq, err: errors.New("no clipboard here")})
+	packet("status=OK:pw="+b64("again"), "")
+	packet("status=DATA:mime="+b64("."), "image/png")
+	request = packet("status=DONE", "")
 	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	id := regexp.MustCompile(`id=(\d+)`).FindStringSubmatch(fmt.Sprint(listing()))[1]
-	packet("status=OK:id="+id, "")
-	packet("status=DATA:id="+id+":mime="+b64("."), "image/png")
-	if packet("status=DONE:id="+id, "") != nil || m.attached() {
-		t.Error("a cancelled ctrl+v went on reading the clipboard")
+	reply(request, "image/png", "\x89PNG late")
+	if string(m.attach.Photo) == "\x89PNG late" {
+		t.Error("a cancelled paste was attached")
+	}
+
+	// Without a clipboard of its own, as over SSH, ctrl+v points to kitty's
+	// paste instead of asking kitty, which would prompt the user.
+	if cmd := m.update(clipboardMsg{seq: m.attachSeq, err: errors.New("no clipboard here")}); cmd != nil {
+		t.Error("ctrl+v asked the terminal for its clipboard")
+	}
+	if !strings.Contains(m.status, "kitty's paste key") {
+		t.Errorf("status %q", m.status)
 	}
 }

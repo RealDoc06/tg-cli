@@ -24,7 +24,7 @@ const (
 	PasteEventsMode = ansi.DECMode(5522)
 )
 
-// ListTypes is the type to read for the list of types on the clipboard.
+// ListTypes is the type a paste event lists the clipboard's types under.
 const ListTypes = "."
 
 // textTypes are the names text goes by, in order of preference.
@@ -75,13 +75,11 @@ func ParsePacket(seq string) (Packet, bool) {
 	return p, true
 }
 
-// ReadRequest asks the terminal for the clipboard data of one type, or for
-// the list of types with ListTypes. The terminal tags every packet of its
-// reply with id. pw and name identify the request: the one-time password of
-// a paste event with "Paste event", or a password of this run that the user
-// can allow once for all requests.
-func ReadRequest(id int, pw, name, mime string) string {
-	return "\x1b]5522;type=read:id=" + strconv.Itoa(id) + ":pw=" + encode(pw) + ":name=" + encode(name) + ";" + encode(mime) + "\x1b\\"
+// ReadRequest asks the terminal for the clipboard data of one type, with the
+// one-time password of the paste event that listed it. The terminal tags
+// every packet of its reply with id.
+func ReadRequest(id int, pw, mime string) string {
+	return "\x1b]5522;type=read:id=" + strconv.Itoa(id) + ":pw=" + encode(pw) + ":name=" + encode("Paste event") + ";" + encode(mime) + "\x1b\\"
 }
 
 // Pick chooses what to read from a list of types: a PNG image when images

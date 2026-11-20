@@ -131,8 +131,8 @@ The mouse works too: click a chat, scroll either pane. New messages arrive live.
 
 To send a picture, copy it and paste it into the composer, or press `ctrl+v`, or drop the file on the terminal, which pastes its path. Without an image in the clipboard, both paste text.
 
-- In kitty, pastes read the clipboard through the terminal, so pictures paste from your own machine even over SSH. Over SSH, `ctrl+v` asks kitty too, which asks you once per session.
-- Elsewhere `ctrl+v` reads the clipboard with `osascript` on macOS, PowerShell on Windows, and `wl-paste` or `xclip` on Linux, so over SSH it only sees the remote machine's clipboard.
+- In kitty, pastes read the clipboard through the terminal, so pictures paste from your own machine even over SSH, with kitty's paste key (`ctrl+shift+v`, `cmd+v` on macOS).
+- `ctrl+v` reads the clipboard with `osascript` on macOS, PowerShell on Windows, and `wl-paste` or `xclip` on Linux. Over SSH that is the remote machine's clipboard, which holds yours only with X11 forwarding or a clipboard bridge.
 - Terminals that keep `ctrl+v` for themselves, like Windows Terminal, need that binding removed.
 
 ### Themes

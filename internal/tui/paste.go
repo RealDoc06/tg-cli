@@ -9,13 +9,13 @@ import (
 )
 
 // The terminal's clipboard. In kitty, pastes read the clipboard through the
-// terminal (OSC 5522), which is the user's own clipboard even over SSH, and
-// so does ctrl+v where the system's clipboard tools cannot reach one.
-// Elsewhere the terminal pastes text and ctrl+v only has the tools, see
-// pasteImage.
+// terminal (OSC 5522), which is the user's own clipboard even over SSH. Each
+// paste comes with a one-time password, so kitty does not ask the user.
+// ctrl+v only uses the system's clipboard tools, see pasteImage: reads that
+// tg started itself would need the user's permission.
 
 // termReply collects one OSC 5522 reply, from its OK packet to its DONE. id
-// is the attachSeq of the read it answers, 0 for a paste event.
+// is the attachSeq of the read it answers, 0 for the paste event itself.
 type termReply struct {
 	id   int
 	pw   string
@@ -38,8 +38,8 @@ func (m *model) termPacket(p clipboard.Packet) tea.Cmd {
 		if r == nil {
 			return nil
 		}
-		if list, ok := r.data[clipboard.ListTypes]; ok {
-			return m.termListed(r, list)
+		if list, ok := r.data[clipboard.ListTypes]; ok && r.id == 0 {
+			return m.termListed(r.pw, list)
 		}
 		if r.id != m.attachSeq {
 			return nil
@@ -67,27 +67,15 @@ func (m *model) termPacket(p clipboard.Packet) tea.Cmd {
 	return nil
 }
 
-// termListed reads what the clipboard holds once the terminal listed its
-// types, after a paste event or ctrl+v.
-func (m *model) termListed(r *termReply, list []byte) tea.Cmd {
-	if r.id != 0 && r.id != m.attachSeq {
-		return nil // ctrl+v was cancelled or replaced
-	}
+// termListed reads what the clipboard holds once a paste event listed its
+// types, with the paste's one-time password.
+func (m *model) termListed(pw string, list []byte) tea.Cmd {
 	mime := clipboard.Pick(list, m.focus == focusInput)
 	if mime == "" {
-		if r.id != 0 { // ctrl+v on an empty clipboard
-			return m.update(clipboardMsg{seq: r.id, err: clipboard.ErrNoImage})
-		}
 		return nil
 	}
-	pw, name := r.pw, "Paste event"
-	if pw == "" {
-		pw, name = m.termPW, "tg"
-	}
-	if r.id == 0 {
-		m.startRead()
-	}
-	return tea.Raw(clipboard.ReadRequest(m.attachSeq, pw, name, mime))
+	m.startRead()
+	return tea.Raw(clipboard.ReadRequest(m.attachSeq, pw, mime))
 }
 
 // startRead begins a clipboard read for the composer. Only the latest read
