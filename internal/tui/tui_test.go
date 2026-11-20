@@ -111,6 +111,12 @@ func TestOpenChatDedupesAndStaysRead(t *testing.T) {
 	if got := len(m.histories[chat.ID].msgs); got != before+1 {
 		t.Errorf("history grew by %d messages, want 1", got-before)
 	}
+	// An edit of a message older than the loaded page stays out of it.
+	old := core.Message{ID: 1, ChatID: chat.ID, From: "Someone", Date: time.Now(), Text: "old, edited", Edited: true}
+	m.Update(eventMsg(core.Event{Kind: core.EventEdit, Chat: chat, Message: old}))
+	if last := m.histories[chat.ID].msgs; last[len(last)-1].ID != msg.ID {
+		t.Error("an edit of an unloaded older message was shown as the newest")
+	}
 	if unread := m.chat(chat.ID).Unread; unread != 0 {
 		t.Errorf("open chat has %d unread", unread)
 	}

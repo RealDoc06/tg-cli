@@ -313,8 +313,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.replyTo, m.editing, m.editFrom = 0, msg.id, original.Text
 				m.input.SetValue(msg.text)
 				m.input.CursorEnd()
+				m.revealMessage(msg.id)
 			}
-			return m, nil
+			return m, m.afterScroll()
 		}
 		if h := m.histories[msg.chatID]; h != nil {
 			if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.id }); i >= 0 {
@@ -326,7 +327,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			last.Text, last.Edited = msg.text, true
 			c.Last = &last
 		}
-		return m, nil
+		return m, m.afterScroll() // a shorter text has fewer lines
 
 	case eventMsg:
 		ev := core.Event(msg)
@@ -820,7 +821,9 @@ func (m *model) addMessage(msg core.Message, chat *core.Chat) {
 	if h := m.histories[msg.ChatID]; h != nil && h.loaded {
 		if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.ID }); i >= 0 {
 			h.msgs[i] = msg
-		} else {
+		} else if len(h.msgs) == 0 || msg.ID > h.msgs[len(h.msgs)-1].ID {
+			// Only newer messages join: an edit of one older than what is
+			// loaded must not show up as the newest.
 			h.msgs = append(h.msgs, msg)
 			if msg.ChatID == m.openID && m.scroll > 0 {
 				m.scroll = 0
