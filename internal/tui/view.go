@@ -222,6 +222,7 @@ func (m *model) conversation(w, h int) []string {
 		m.input.Prompt, m.input.Placeholder = "["+ansi.Truncate(name, max(4, w/3), "…")+"] > ", "add a caption"
 	}
 	m.input.SetWidth(max(1, w-2-ansi.StringWidth(m.input.Prompt)))
+	m.input.SetCursor(m.input.Position()) // SetWidth alone keeps the old visible window
 	rows = append(rows, fit(" "+m.input.View(), w))
 	return rows
 }

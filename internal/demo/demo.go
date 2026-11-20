@@ -206,7 +206,10 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 	m := core.Message{ID: b.nextID, ChatID: chatID, From: self.Name, FromID: self.ID, Out: true, Date: time.Now(), Text: req.Text, ReplyTo: req.ReplyTo}
 	photo := req.Photo
 	if photo == nil && core.IsPhotoFile(req.File) {
-		photo, _ = os.ReadFile(req.File)
+		var err error
+		if photo, err = os.ReadFile(req.File); err != nil {
+			return core.Message{}, err
+		}
 	}
 	switch {
 	case photo != nil:
