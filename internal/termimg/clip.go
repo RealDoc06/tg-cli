@@ -164,8 +164,9 @@ func decode(ctx context.Context, clip []byte, w, h int) ([]image.Image, error) {
 	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
 	if err != nil {
-		msg, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n")
-		return nil, fmt.Errorf("ffmpeg: %w: %s", err, msg)
+		// The last line: the first are often hardware decoders ffmpeg tried.
+		lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
+		return nil, fmt.Errorf("ffmpeg: %w: %s", err, lines[len(lines)-1])
 	}
 	var images []image.Image
 	for size := w * h * 4; len(raw) >= size; raw = raw[size:] {

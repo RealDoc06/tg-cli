@@ -789,7 +789,8 @@ func TestOldestPicturesAreFreedPastTheBudget(t *testing.T) {
 	m := loaded(t, 120, 30)
 	big := imageBudget / 3
 	for i := 1; i <= 4; i++ {
-		m.update(uploadedMsg{imageKey{1, i}, shown{id: i, cols: 4, rows: 2, bytes: big}})
+		key := imageKey{1, i}
+		m.update(uploadedMsg{key, shown{id: i, cols: 4, rows: 2, bytes: big, seq: m.loading(key)}})
 	}
 	if _, kept := m.images[imageKey{1, 1}]; kept {
 		t.Error("the oldest picture is still counted on")
@@ -801,6 +802,41 @@ func TestOldestPicturesAreFreedPastTheBudget(t *testing.T) {
 	}
 	if m.imageBytes != 3*big {
 		t.Errorf("%d bytes counted, want %d", m.imageBytes, 3*big)
+	}
+	if !slices.Contains(m.free, 1) {
+		t.Error("the oldest picture stays in the terminal")
+	}
+}
+
+// An edit can replace the media of a message, so its picture is freed and
+// loaded again. A load from before the edit must not land on top.
+func TestEditedPictureIsFreed(t *testing.T) {
+	m := loaded(t, 120, 50)
+	m.graphics = true
+	open(t, m, 1) // Homelab, with a photo
+	h := m.histories[m.openID]
+	photo := h.msgs[slices.IndexFunc(h.msgs, func(msg core.Message) bool { return msg.Media == core.MediaPhoto })]
+	key := imageKey{photo.ChatID, photo.ID}
+	m.images = map[imageKey]shown{}
+	m.imageBytes = 0
+	upload(m, m.loadPictures())
+	old := m.images[key]
+	if old.id == 0 || m.imageBytes < old.bytes {
+		t.Fatalf("photo is %+v, %d bytes counted", old, m.imageBytes)
+	}
+	before := m.imageBytes
+
+	m.update(eventMsg(core.Event{Kind: core.EventEdit, Message: photo}))
+	if _, seen := m.images[key]; seen || m.imageBytes != before-old.bytes || !slices.Contains(m.free, old.id) {
+		t.Errorf("after the edit: %+v, %d bytes counted, freeing %v", m.images[key], m.imageBytes, m.free)
+	}
+
+	// A load started before the edit finishes after it.
+	seq := m.loading(key)
+	m.loading(key) // the load the edit started
+	m.update(imageMsg{key: key, seq: seq, frames: [][]byte{{1}}, cols: 4, rows: 2})
+	if m.images[key].id != 0 {
+		t.Error("an outdated picture landed")
 	}
 }
 

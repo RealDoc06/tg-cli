@@ -15,8 +15,9 @@ import (
 // any real sticker does, such as precomps that use each other over and over.
 var ErrTooComplex = errors.New("lottie: animation is too complex to draw")
 
-// workBudget bounds the work of one frame, counted in polygon points and
-// layers. The stickers of Telegram's own apps stay under 40 000.
+// workBudget bounds the work of one frame, counted in polygon points,
+// layers, and pixels painted (pixelWork to a unit). The stickers of
+// Telegram's own apps stay under a tenth of it.
 const workBudget = 1_000_000
 
 // Render draws the animation at a frame, scaled to w x h pixels.
@@ -77,6 +78,7 @@ func (r *renderer) layers(dst *image.RGBA, ls []layer, frame float64, base affin
 			r.layer(dst, l, frame, base, byIndex, depth)
 			continue
 		}
+		r.raster.work += 2 * r.canvas.Dx() * r.canvas.Dy() / pixelWork // the layer and its matte, alone
 		buf := r.buffer()
 		r.layer(buf, l, frame, base, byIndex, depth)
 		src := (*layer)(nil)
@@ -111,6 +113,8 @@ func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, 
 	alone := len(l.Masks) > 0 || opacity < 1
 	out := dst
 	if alone {
+		// A buffer of its own, its masks and compositing touch the canvas.
+		r.raster.work += (1 + len(l.Masks)) * r.canvas.Dx() * r.canvas.Dy() / pixelWork
 		out = r.buffer()
 		defer r.release(out)
 	}
@@ -187,7 +191,7 @@ func (r *renderer) applyMasks(buf *image.RGBA, masks []mask, frame float64, m af
 	}
 	b := buf.Rect
 	cover := make([]float64, b.Dx()*b.Dy())
-	if masks[0].Mode == "s" || masks[0].Mode == "i" {
+	if masks[0].Mode == "s" || masks[0].Mode == "i" || masks[0].Mode == "d" {
 		for i := range cover {
 			cover[i] = 1 // subtracting and intersecting start from everything
 		}

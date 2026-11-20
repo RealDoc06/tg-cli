@@ -409,6 +409,9 @@ func (b *backend) Picture(ctx context.Context, chatID int64, msgID int) (core.Pi
 	}
 	switch m := media.(type) {
 	case *tg.MessageMediaPhoto:
+		if m.Spoiler {
+			return core.Picture{}, errors.New("the photo is behind a spoiler")
+		}
 		photo, ok := m.Photo.(*tg.Photo)
 		if !ok {
 			return core.Picture{}, errors.New("photo is no longer available")
@@ -416,6 +419,9 @@ func (b *backend) Picture(ctx context.Context, chatID int64, msgID int) (core.Pi
 		still, err := b.fetchImage(ctx, photoFile(photo, thumbSize(photo.Sizes, photoDisplaySize)))
 		return core.Picture{Still: still}, err
 	case *tg.MessageMediaDocument:
+		if m.Spoiler {
+			return core.Picture{}, errors.New("the file is behind a spoiler")
+		}
 		if doc, ok := m.Document.(*tg.Document); ok {
 			return b.documentPicture(ctx, doc)
 		}

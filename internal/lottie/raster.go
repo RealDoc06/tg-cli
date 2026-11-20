@@ -108,9 +108,12 @@ type raster struct {
 	work int
 }
 
-// layerWork is what a layer counts for in the work budget: it may take a
-// buffer of its own.
-const layerWork = 256
+// layerWork is what a layer counts for in the work budget, pixelWork how
+// many pixels count as one unit.
+const (
+	layerWork = 256
+	pixelWork = 64
+)
 
 func newRaster(canvas image.Rectangle) *raster {
 	return &raster{
@@ -158,15 +161,14 @@ func clip(pts []vec, box [4]float64) []vec {
 			}
 			return p[1] <= box[3]
 		}
+		// The crossing lands exactly on the edge, whatever the rounding.
 		cross := func(a, b vec) vec {
-			var t float64
-			switch edge {
-			case 0, 2:
-				t = (box[edge] - a[0]) / (b[0] - a[0])
-			default:
-				t = (box[edge] - a[1]) / (b[1] - a[1])
+			if edge == 0 || edge == 2 {
+				t := (box[edge] - a[0]) / (b[0] - a[0])
+				return vec{box[edge], a[1] + (b[1]-a[1])*t}
 			}
-			return vec{a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t}
+			t := (box[edge] - a[1]) / (b[1] - a[1])
+			return vec{a[0] + (b[0]-a[0])*t, box[edge]}
 		}
 		in := pts
 		pts = make([]vec, 0, len(in)+4)
@@ -201,6 +203,9 @@ func (r *raster) coverage(canvas image.Rectangle) *image.Alpha {
 		return nil
 	}
 	w, h := box.Dx(), box.Dy()
+	if r.work += w * h / pixelWork; r.work > workBudget {
+		return nil
+	}
 	r.z.Reset(w, h)
 	r.z.DrawOp = draw.Src
 	ox, oy := float32(box.Min.X), float32(box.Min.Y)
@@ -235,10 +240,18 @@ func solidOf(c color.NRGBA) solid {
 	return solid{float64(c.R) / 255 * a, float64(c.G) / 255 * a, float64(c.B) / 255 * a, a}
 }
 
-// draw paints the collected polygons over dst.
+// draw paints the collected polygons over dst. Painting counts toward the
+// work budget, a gradient by how many stops it looks through per pixel.
 func (r *raster) draw(dst *image.RGBA, src paint) {
 	cov := r.coverage(dst.Rect)
 	if cov == nil {
+		return
+	}
+	cost := 1
+	if g, ok := src.(*gradient); ok {
+		cost += len(g.colors)/4 + len(g.alphas)/2
+	}
+	if r.work += cov.Rect.Dx() * cov.Rect.Dy() * cost / pixelWork; r.work > workBudget {
 		return
 	}
 	b := cov.Rect
