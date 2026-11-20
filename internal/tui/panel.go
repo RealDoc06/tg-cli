@@ -173,17 +173,18 @@ var logo = []string{
 // panelView renders the open page as a box centered over the panes: where
 // the box goes, its lines, and the row of the box its first item is on.
 func (m *model) panelView() (x, y int, lines []string, first int) {
-	w, title := 38, ""
+	// Lines are laid out for the box's width, narrower on small terminals.
+	w, title := min(38, m.width), ""
 	var body []string
 	switch m.panel.page {
 	case pageMain:
 		// The logo, the version and a blank row go when they do not fit,
 		// so the items always show.
-		w = len([]rune(logo[0])) + 6
-		if m.width >= w && m.bodyRows() >= len(logo)+2+len(mainItems)+4 {
+		if lw := len([]rune(logo[0])) + 6; m.width >= lw && m.bodyRows() >= len(logo)+2+len(mainItems)+4 {
+			w = lw
 			body = append(m.logoLines(w-2), "")
 		} else {
-			w, title = 38, "tg-cli"
+			title = "tg-cli"
 		}
 		for i, p := range mainItems {
 			body = append(body, m.item(center(pageNames[p], w-3), "", i == m.panel.sel, w-2))
@@ -199,10 +200,9 @@ func (m *model) panelView() (x, y int, lines []string, first int) {
 			body = append(body, m.item(" "+s.name, value, i == m.panel.sel, w-2))
 		}
 	case pageHelp:
-		w, title = 46, pageNames[pageHelp]
+		w, title = min(46, m.width), pageNames[pageHelp]
 		body = m.helpLines()
 	}
-	w = min(w, m.width)
 	lines = m.box(title, body, w)
 	return max(0, (m.width-w)/2), max(0, (m.bodyRows()-len(lines))/2), lines, first + 2
 }
