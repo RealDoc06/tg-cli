@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>tg · Telegram for agents and humans</title>
 <meta name="description" content="One binary. Plain commands give your agent your Telegram chats, a fast terminal client gives them to you. Linux, macOS and Windows.">
-<meta name="theme-color" content="#000000">
+<meta name="theme-color" content="#11111b">
 <meta name="color-scheme" content="dark">
 <!-- Added to the home screen, the page opens full screen and draws under the status bar. -->
 <meta name="mobile-web-app-capable" content="yes">
@@ -25,14 +25,15 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
 <style>
-/* Layout: a black page with one left-aligned column, 68rem wide. Few words,
-   large type. Everything that is a terminal (the install command, the demos,
-   the screenshots) is a Catppuccin Mocha panel, tg's default theme. */
+/* Layout: one left-aligned column, 68rem wide. Few words, large type. The whole
+   page is Catppuccin Mocha, tg's default theme: the page sits on the darkest
+   shade and everything that is a terminal (the install command, the demos, the
+   screenshots) is a panel one step lighter. */
 :root {
-  --bg: #000;
-  --fg: #f4f4f5;
-  --muted: #a1a1aa;
-  --line: #27272a;
+  --bg: var(--crust);
+  --fg: var(--text);
+  --muted: var(--subtext);
+  --line: var(--surface);
   /* Catppuccin Mocha */
   --base: #1e1e2e;
   --mantle: #181825;
@@ -113,7 +114,7 @@ section { padding-block: clamp(3rem, 7vw, 5.5rem); }
 .term { min-width: 0; overflow: hidden; border: 1px solid var(--surface); border-radius: var(--radius); background: var(--base); color: var(--text); }
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-inline: 1rem; background: var(--mantle); border-bottom: 1px solid var(--surface); }
 .tabs { display: flex; gap: 1.25rem; }
-.bar button, .bar .label { padding: .65rem 0; border: 0; background: none; color: var(--overlay); font: 500 .8rem var(--mono); }
+.bar button, .bar .label { padding: .5rem 0; border: 0; background: none; color: var(--overlay); font: 500 .8rem var(--mono); }
 .bar button:hover, .bar button[aria-pressed="true"] { color: var(--text); }
 .bar button[aria-pressed="true"] { box-shadow: inset 0 -2px var(--sky); }
 pre, .cmd code {
@@ -138,23 +139,26 @@ pre .cur { background: var(--text); }
 
 /* The install command is the same panel, with the systems as its tabs. */
 .install { max-width: 58rem; }
-.cmd { display: flex; align-items: center; gap: 1rem; padding: 1rem 1rem 1rem 1.1rem; }
+.cmd { display: flex; align-items: center; gap: .75rem; padding: .5rem .5rem .5rem 1.1rem; }
 .cmd code { flex: 1; min-width: 0; font-size: clamp(.8rem, 1.4vw, .875rem); }
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 5rem;
-  padding: .6rem 1rem;
+/* Copy: an icon that turns into a green check once the command is copied. */
+.copy {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
   border: 0;
   border-radius: .5rem;
-  background: var(--sky);
-  color: var(--crust);
-  font-weight: 600;
-  font-size: .9rem;
-  white-space: nowrap;
+  background: none;
+  color: var(--subtext);
+  transition: background-color .15s, color .15s;
 }
-.btn:hover { background: #a5e6f2; }
+.copy:hover { background: var(--surface); color: var(--text); }
+.copy svg { width: 1.1rem; height: 1.1rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.copy .check, .copy.done .sheets { display: none; }
+.copy.done { background: var(--green); color: var(--crust); }
+.copy.done .check { display: block; }
 
 figure { display: grid; gap: 1rem; margin-block: 0; }
 .shot { border: 1px solid var(--surface); border-radius: var(--radius); }
@@ -174,8 +178,7 @@ footer a:hover { color: var(--fg); }
   .bar { padding-inline: .75rem; gap: .5rem; }
   .tabs { gap: .75rem; }
   pre { font-size: .74rem; padding: .85rem; }
-  .cmd { padding: .85rem; gap: .75rem; }
-  .btn { min-width: 4.25rem; padding-inline: .75rem; }
+  .cmd { padding: .6rem .5rem .6rem .85rem; gap: .5rem; }
 }
 @media (prefers-reduced-motion: reduce) {
   [data-replay] { display: none; }   /* nothing to replay when nothing is typed */
@@ -201,14 +204,16 @@ footer a:hover { color: var(--fg); }
   <div class="term install">
     <div class="bar">
       <div class="tabs" role="group" aria-label="Operating system">
-        <button type="button" data-os="macos" aria-pressed="true">macOS</button>
-        <button type="button" data-os="linux" aria-pressed="false">Linux</button>
+        <button type="button" data-os="unix" aria-pressed="true">macOS / Linux</button>
         <button type="button" data-os="windows" aria-pressed="false">Windows</button>
       </div>
     </div>
     <div class="cmd">
       <code><span class="p" id="install-prompt">$ </span><span id="install-cmd">curl -fsSL https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.sh | bash</span></code>
-      <button type="button" class="btn" id="copy">Copy</button>
+      <button type="button" class="copy" id="copy" aria-label="Copy">
+        <svg class="sheets" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>
+        <svg class="check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 9.5 17 19 7.5"/></svg>
+      </button>
     </div>
   </div>
   <p class="note"><span id="phone-note" hidden>Run it on your computer. </span>Then <a href="https://github.com/RealDoc06/tg-cli#install"><code>tg login</code></a>. <span id="install-note">macOS and Linux.</span><noscript> On Windows, see the <a href="https://github.com/RealDoc06/tg-cli#install">README</a>.</noscript></p>
@@ -352,25 +357,19 @@ them, to real people, and cannot be taken back by this tool.
 </footer>
 
 <script>
-// Install command: one per system, preselected from the visitor's own.
+// Install command: one for macOS and Linux, one for Windows, preselected from the visitor's system.
 const RAW = 'https://raw.githubusercontent.com/RealDoc06/tg-cli/main/';
-const SH = `curl -fsSL ${RAW}install.sh | bash`;
 const SYSTEMS = {
-  macos: { prompt: '$ ', command: SH, note: 'Apple silicon and Intel.' },
-  linux: { prompt: '$ ', command: SH, note: 'amd64 and arm64.' },
-  windows: { prompt: '> ', command: `irm ${RAW}install.ps1 | iex`, note: 'PowerShell. In Git Bash, MSYS2 or WSL use the Linux command.' },
+  unix: { prompt: '$ ', command: `curl -fsSL ${RAW}install.sh | bash`, note: 'amd64 and arm64.' },
+  windows: { prompt: '> ', command: `irm ${RAW}install.ps1 | iex`, note: 'PowerShell. In Git Bash, MSYS2 or WSL use the macOS / Linux command.' },
 };
 
 const platform = `${navigator.userAgentData?.platform ?? ''} ${navigator.platform ?? ''} ${navigator.userAgent}`;
-// tg does not run on phones: say so, and still preselect the nearest system.
+// tg does not run on phones: say so, and still show a command.
 const handheld = /android|iphone|ipad|ipod/i.test(platform) || (/mac/i.test(platform) && navigator.maxTouchPoints > 1); // iPadOS says it is a Mac
 document.getElementById('phone-note').hidden = !handheld;
 
-function detectSystem() {
-  if (/mac|iphone|ipad|ipod/i.test(platform)) return 'macos';
-  if (/windows|win32|win64/i.test(platform)) return 'windows';
-  return 'linux';
-}
+const detectSystem = () => /windows|win32|win64/i.test(platform) ? 'windows' : 'unix';
 
 const escapeHtml = (text) => text.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char]);
 const paint = (kind, text) => `<span class="${kind}">${escapeHtml(text)}</span>`;
@@ -419,14 +418,18 @@ copyButton.addEventListener('click', async () => {
   const command = document.getElementById('install-cmd');
   try {
     await navigator.clipboard.writeText(command.textContent);
-    copyButton.textContent = 'Copied';
   } catch {
     // No clipboard access (plain http, old webview): select it so one more gesture copies.
     getSelection().selectAllChildren(command);
-    copyButton.textContent = 'Selected';
+    return;
   }
+  copyButton.classList.add('done');
+  copyButton.setAttribute('aria-label', 'Copied');
   clearTimeout(copyTimer);
-  copyTimer = setTimeout(() => { copyButton.textContent = 'Copy'; }, 1600);
+  copyTimer = setTimeout(() => {
+    copyButton.classList.remove('done');
+    copyButton.setAttribute('aria-label', 'Copy');
+  }, 1600);
 });
 
 // Terminals: the markup holds the finished session. A terminal waits blank
