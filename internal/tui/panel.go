@@ -186,8 +186,13 @@ func (m *model) panelView() (x, y int, lines []string, first int) {
 		} else {
 			title = "tg-cli"
 		}
+		// Centered names need no bar: it would float away from them.
 		for i, p := range mainItems {
-			body = append(body, m.item(center(pageNames[p], w-3), "", i == m.panel.sel, w-2))
+			style := m.st.text
+			if i == m.panel.sel {
+				style = m.st.accent.Bold(true)
+			}
+			body = append(body, center(style.Render(pageNames[p]), w-2))
 		}
 		first = len(body) - len(mainItems)
 	case pageSettings:
