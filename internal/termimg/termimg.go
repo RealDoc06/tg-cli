@@ -239,16 +239,7 @@ func Fit(data []byte, maxCols, maxRows int) (pngData []byte, cols, rows int, err
 	if b.Empty() {
 		return nil, 0, 0, fmt.Errorf("image is empty")
 	}
-	maxCols, maxRows = min(maxCols, MaxCells), min(maxRows, MaxCells)
-	// Height in cells per column of width.
-	ratio := float64(b.Dy()) / float64(b.Dx()) / cellAspect
-	cols = maxCols
-	rows = int(float64(cols)*ratio + 0.5)
-	if rows > maxRows {
-		rows = maxRows
-		cols = int(float64(rows)/ratio + 0.5)
-	}
-	cols, rows = max(1, min(cols, maxCols)), max(1, rows)
+	cols, rows = Cells(b.Size(), maxCols, maxRows)
 
 	w := min(b.Dx(), cols*cellPx)
 	h := max(1, int(float64(w)*float64(b.Dy())/float64(b.Dx())+0.5))
@@ -259,6 +250,20 @@ func Fit(data []byte, maxCols, maxRows int) (pngData []byte, cols, rows int, err
 		return nil, 0, 0, err
 	}
 	return out.Bytes(), cols, rows, nil
+}
+
+// Cells is the cell area Fit draws an image of size pixels in.
+func Cells(size image.Point, maxCols, maxRows int) (cols, rows int) {
+	maxCols, maxRows = min(maxCols, MaxCells), min(maxRows, MaxCells)
+	// Height in cells per column of width.
+	ratio := float64(size.Y) / float64(size.X) / cellAspect
+	cols = maxCols
+	rows = int(float64(cols)*ratio + 0.5)
+	if rows > maxRows {
+		rows = maxRows
+		cols = int(float64(rows)/ratio + 0.5)
+	}
+	return max(1, min(cols, maxCols)), max(1, rows)
 }
 
 // centerSquare returns the largest centered square inside r.

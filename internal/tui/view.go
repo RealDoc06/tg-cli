@@ -253,7 +253,12 @@ func (m *model) chatRow(c *core.Chat, selected bool, w int) []string {
 		case c.Kind == core.KindGroup && !c.Last.Service:
 			preview = firstWord(c.Last.From) + ": " + preview
 		}
-		preview = strings.Join(strings.Fields(preview), " ")
+		preview = m.st.muted.Render(strings.Join(strings.Fields(preview), " "))
+	}
+	// A draft takes the place of the last message, except while it is
+	// being written.
+	if d := m.draft(c.ID); d != "" && (c.ID != m.openID || m.focus != focusInput) {
+		preview = m.st.err.Render("[draft]") + " " + m.st.muted.Render(strings.Join(strings.Fields(d), " "))
 	}
 	if c.Unread > 0 {
 		badge = m.st.accent.Bold(true).Render(fmt.Sprint(c.Unread))
@@ -265,7 +270,7 @@ func (m *model) chatRow(c *core.Chat, selected bool, w int) []string {
 	text := w - 1 - avatarCols - 1 - 1
 	return []string{
 		bar + avatar[0] + " " + spread(title, stamp, text) + " ",
-		bar + avatar[1] + " " + spread(m.st.muted.Render(preview), badge, text) + " ",
+		bar + avatar[1] + " " + spread(preview, badge, text) + " ",
 	}
 }
 
@@ -419,12 +424,17 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 		}
 		// A picture that is drawn replaces its "[photo]" label, unless the
 		// pane became too narrow for it. A video keeps it for its duration.
+		// Until it is drawn, its room is kept when its size is known.
 		pic := m.images[imageKey{msg.ChatID, msg.ID}]
 		if msg.Picture == core.NoPicture || pic.cols > w-indent-1 {
 			pic = shown{}
 		}
+		keptRows := pic.rows
+		if pic.id == 0 {
+			_, keptRows = m.pictureCells(*msg, w)
+		}
 		body := msg.Text
-		if msg.Media != "" && (pic.id == 0 || msg.Picture == core.PictureVideo) {
+		if msg.Media != "" && (keptRows == 0 || msg.Picture == core.PictureVideo) {
 			body = strings.TrimSpace(m.st.muted.Render("["+msg.Media+"]") + " " + body)
 		}
 		text := strings.TrimSpace(name + ": " + body)
@@ -445,6 +455,10 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 		if pic.id != 0 {
 			for _, l := range termimg.Placeholder(pic.id, pic.cols, pic.rows) {
 				lines = append(lines, msgLine{padded + l, i})
+			}
+		} else {
+			for range keptRows {
+				lines = append(lines, msgLine{padded, i})
 			}
 		}
 	}

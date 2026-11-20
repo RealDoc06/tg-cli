@@ -266,6 +266,35 @@ func TestStickerAndVideoAreDrawn(t *testing.T) {
 	}
 }
 
+// A picture whose size comes with its message keeps its room while it loads,
+// so the conversation does not move when it lands. One that cannot be loaded
+// gives the room back.
+func TestPictureKeepsItsRoomWhileLoading(t *testing.T) {
+	m := loaded(t, narrowWidth-4, 40) // only the conversation shows
+	m.graphics = true
+	open(t, m, 1) // Homelab, a video last
+	h := m.histories[m.openID]
+	_, rw := m.layout()
+	before := len(m.messageLines(h, rw))
+
+	m.images = map[imageKey]shown{} // the loads open started are dropped
+	upload(m, m.loadPictures())
+	last := h.msgs[len(h.msgs)-1]
+	key := imageKey{last.ChatID, last.ID}
+	video := m.images[key]
+	if video.id == 0 {
+		t.Fatal("the video was not drawn")
+	}
+	if after := len(m.messageLines(h, rw)); after != before {
+		t.Errorf("the conversation went from %d to %d lines when the pictures landed", before, after)
+	}
+
+	m.update(imageMsg{key: key, seq: m.loading(key)})
+	if got := len(m.messageLines(h, rw)); got != before-video.rows {
+		t.Errorf("a failed video leaves %d lines, want %d", got, before-video.rows)
+	}
+}
+
 // Dropping an image on the terminal pastes its path, escaped like a shell
 // word. It must attach the image, and enter must send it with the caption.
 func TestPastedImagePathIsSentAsPhoto(t *testing.T) {
@@ -396,6 +425,30 @@ func TestPhotoLoadKeepsTheView(t *testing.T) {
 		if after := top(); after != before {
 			t.Errorf("above=%v: top line went from %q to %q", above, before, after)
 		}
+	}
+}
+
+// What was typed and not sent waits in its chat: the list shows it as a
+// draft, and it is back in the composer when the chat opens again.
+func TestDraftWaitsInItsChat(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1) // Homelab
+	for _, r := range "see you at 10" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	open(t, m, 2)
+	if m.input.Value() != "" {
+		t.Errorf("the draft followed into another chat: %q", m.input.Value())
+	}
+	if !strings.Contains(ansi.Strip(m.View().Content), "[draft] see you at 10") {
+		t.Error("the chat list does not show the draft")
+	}
+	open(t, m, 1)
+	if m.input.Value() != "see you at 10" {
+		t.Errorf("the composer holds %q", m.input.Value())
+	}
+	if strings.Contains(ansi.Strip(m.View().Content), "[draft]") {
+		t.Error("the draft is shown in the list while it is written")
 	}
 }
 

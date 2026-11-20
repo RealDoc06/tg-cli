@@ -2,6 +2,7 @@ package mtp
 
 import (
 	"fmt"
+	"image"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -18,7 +19,7 @@ func (b *backend) message(raw tg.MessageClass, e tg.Entities) (core.Message, boo
 			Date: time.Unix(int64(m.Date), 0), Text: m.Message,
 			Edited: m.EditDate != 0 && !m.EditHide,
 		}
-		out.Media, out.Picture = mediaSummary(m.Media)
+		out.Media, out.Picture, out.PictureSize = mediaSummary(m.Media)
 		if reply, ok := m.ReplyTo.(*tg.MessageReplyHeader); ok && !reply.ForumTopic {
 			out.ReplyTo = reply.ReplyToMsgID
 		}
@@ -70,39 +71,59 @@ func (b *backend) author(from, chat tg.PeerClass, out bool, e tg.Entities) (int6
 	return id, fmt.Sprint(id)
 }
 
-// mediaSummary names the attachment of a message in a few words and tells
-// how it can be drawn. Media behind a spoiler is not drawn.
-func mediaSummary(media tg.MessageMediaClass) (string, core.PictureKind) {
+// mediaSummary names the attachment of a message in a few words, tells how
+// it can be drawn and its size in pixels when known. Media behind a spoiler
+// is not drawn.
+func mediaSummary(media tg.MessageMediaClass) (string, core.PictureKind, image.Point) {
 	switch m := media.(type) {
 	case nil, *tg.MessageMediaEmpty, *tg.MessageMediaWebPage:
-		return "", core.NoPicture
+		return "", core.NoPicture, image.Point{}
 	case *tg.MessageMediaPhoto:
 		if m.Spoiler {
-			return core.MediaPhoto, core.NoPicture
+			return core.MediaPhoto, core.NoPicture, image.Point{}
 		}
-		return core.MediaPhoto, core.PicturePhoto
+		var size image.Point
+		if photo, ok := m.Photo.(*tg.Photo); ok {
+			size = largestSize(photo.Sizes)
+		}
+		return core.MediaPhoto, core.PicturePhoto, size
 	case *tg.MessageMediaDocument:
 		doc, ok := m.Document.(*tg.Document)
 		if !ok {
-			return "file", core.NoPicture
+			return "file", core.NoPicture, image.Point{}
 		}
 		summary, kind := documentSummary(doc)
 		if m.Spoiler {
 			kind = core.NoPicture
 		}
-		return summary, kind
+		return summary, kind, attrsOf(doc).size
 	case *tg.MessageMediaGeo, *tg.MessageMediaGeoLive, *tg.MessageMediaVenue:
-		return "location", core.NoPicture
+		return "location", core.NoPicture, image.Point{}
 	case *tg.MessageMediaContact:
-		return "contact: " + m.FirstName + " " + m.PhoneNumber, core.NoPicture
+		return "contact: " + m.FirstName + " " + m.PhoneNumber, core.NoPicture, image.Point{}
 	case *tg.MessageMediaPoll:
-		return "poll", core.NoPicture
+		return "poll", core.NoPicture, image.Point{}
 	case *tg.MessageMediaDice:
-		return fmt.Sprintf("dice %s %d", m.Emoticon, m.Value), core.NoPicture
+		return fmt.Sprintf("dice %s %d", m.Emoticon, m.Value), core.NoPicture, image.Point{}
 	case *tg.MessageMediaStory:
-		return "story", core.NoPicture
+		return "story", core.NoPicture, image.Point{}
 	}
-	return "media", core.NoPicture
+	return "media", core.NoPicture, image.Point{}
+}
+
+// largestSize is the size of the largest version of a photo, which is listed
+// last. Stripped and cached sizes are inlined thumbnails, without one.
+func largestSize(sizes []tg.PhotoSizeClass) image.Point {
+	var size image.Point
+	for _, s := range sizes {
+		switch s := s.(type) {
+		case *tg.PhotoSize:
+			size = image.Pt(s.W, s.H)
+		case *tg.PhotoSizeProgressive:
+			size = image.Pt(s.W, s.H)
+		}
+	}
+	return size
 }
 
 // docAttrs gathers the attributes of a document, which come in any order.
@@ -112,6 +133,7 @@ type docAttrs struct {
 	video    *tg.DocumentAttributeVideo
 	audio    *tg.DocumentAttributeAudio
 	name     string
+	size     image.Point // of a picture or a video, zero when not given
 }
 
 func attrsOf(doc *tg.Document) docAttrs {
@@ -124,6 +146,12 @@ func attrsOf(doc *tg.Document) docAttrs {
 			a.animated = true
 		case *tg.DocumentAttributeVideo:
 			a.video = attr
+			a.size = image.Pt(attr.W, attr.H)
+		case *tg.DocumentAttributeImageSize:
+			// A video sticker carries both: either gives its shape.
+			if a.size == (image.Point{}) {
+				a.size = image.Pt(attr.W, attr.H)
+			}
 		case *tg.DocumentAttributeAudio:
 			a.audio = attr
 		case *tg.DocumentAttributeFilename:

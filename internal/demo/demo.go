@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	_ "image/jpeg" // the video's still
 	"image/png"
 	"math"
 	"os"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/RealDoc06/tg-cli/internal/core"
 	"github.com/RealDoc06/tg-cli/internal/lottie"
+	_ "golang.org/x/image/webp" // the sticker's still
 )
 
 // Backend implements core.Backend over fixture data.
@@ -134,6 +136,7 @@ func New() *Backend {
 			if media, ok := strings.CutPrefix(m.Text, "["); ok {
 				m.Media, m.Text = strings.TrimSuffix(media, "]"), ""
 				m.Picture = pictureKind(m.Media)
+				m.PictureSize = pictureSize(m.Media, m.Picture)
 			}
 			b.nextID++
 			b.messages[f.chat.ID] = append(b.messages[f.chat.ID], m)
@@ -220,7 +223,7 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 	}
 	switch {
 	case photo != nil:
-		m.Media, m.Picture = core.MediaPhoto, core.PicturePhoto
+		m.Media, m.Picture, m.PictureSize = core.MediaPhoto, core.PicturePhoto, stillSize(photo)
 		b.photos[m.ID] = photo
 	case req.File != "":
 		m.Media = "file: " + filepath.Base(req.File)
@@ -336,6 +339,8 @@ var (
 	heartJSON []byte
 )
 
+const heartPx = 128 // the side of the heart's still
+
 // heart is the animated sticker as Telegram serves it: gzipped Lottie (TGS)
 // with a small still.
 var heart = sync.OnceValues(func() (core.Picture, error) {
@@ -351,7 +356,7 @@ var heart = sync.OnceValues(func() (core.Picture, error) {
 	if err != nil {
 		return core.Picture{}, err
 	}
-	frame, err := anim.Render(anim.In, 128, 128)
+	frame, err := anim.Render(anim.In, heartPx, heartPx)
 	if err != nil {
 		return core.Picture{}, err
 	}
@@ -372,6 +377,34 @@ func pictureKind(media string) core.PictureKind {
 	}
 	return core.NoPicture
 }
+
+// pictureSize is the size of what Picture draws for a message, as Telegram
+// sends it along with the message.
+func pictureSize(media string, kind core.PictureKind) image.Point {
+	switch {
+	case media == "sticker ❤️":
+		return image.Pt(heartPx, heartPx)
+	case kind == core.PictureSticker:
+		return stillSize(stickerStill)
+	case kind == core.PictureVideo:
+		return stillSize(videoStill)
+	case kind == core.PicturePhoto:
+		return image.Pt(landscapeW, landscapeH)
+	}
+	return image.Point{}
+}
+
+// stillSize is the size of an encoded image, zero when it cannot be read.
+func stillSize(data []byte) image.Point {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return image.Point{}
+	}
+	return image.Pt(cfg.Width, cfg.Height)
+}
+
+// The size of the landscapes painted for photos.
+const landscapeW, landscapeH = 640, 420
 
 // Picture returns a demo sticker or the video, what was sent as a photo, or
 // paints a landscape: a sky, a sun and hills, different for every message.
@@ -398,7 +431,7 @@ func (b *Backend) Picture(_ context.Context, chatID int64, msgID int) (core.Pict
 	case kind == core.NoPicture:
 		return core.Picture{}, fmt.Errorf("message %d has nothing to draw", msgID)
 	}
-	const w, h = 640, 420
+	const w, h = landscapeW, landscapeH
 	hue := float64(msgID) * 67
 	still, err := paint(w, h, func(x, y float64) color.NRGBA {
 		hill := h*0.62 + math.Sin(x/w*5+float64(msgID))*h*0.06

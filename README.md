@@ -130,7 +130,7 @@ Run `tg` with no arguments.
 | `backspace` | Remove the attachment, when the message is empty |
 | `q` `ctrl+c` | Quit |
 
-The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages the composer cannot hold as they are (several lines, special characters) are edited elsewhere. New messages arrive live.
+The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages the composer cannot hold as they are (several lines, special characters) are edited elsewhere. New messages arrive live. What you type and leave unsent stays with its chat, shown in the list as a `[draft]`.
 
 To send a picture, copy it and paste it into the composer, or press `ctrl+v`, or drop the file on the terminal, which pastes its path. Without an image in the clipboard, both paste text.
 

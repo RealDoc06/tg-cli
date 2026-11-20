@@ -102,7 +102,9 @@ type model struct {
 	editFrom         string        // the text the edit started from
 	saving           map[int64]int // edits being saved, per chat
 	stash            *stash        // the composer as it was before an edit, nil for none
-	menu             *menu         // the open context menu, nil when there is none
+	// drafts holds what was typed and not sent in the chats left since.
+	drafts map[int64]string
+	menu   *menu // the open context menu, nil when there is none
 
 	// images holds the pictures uploaded to the terminal. An entry with ID
 	// 0 is loading, or failed and shows as text.
@@ -159,8 +161,12 @@ type imageKey struct {
 
 // shown is a picture uploaded to the terminal as image id, drawn over a
 // cols x rows cell area, which takes about bytes there. seq tells loads of
-// the same picture apart: only the latest may land.
-type shown struct{ id, cols, rows, bytes, seq int }
+// the same picture apart: only the latest may land. failed is set when it
+// could not be loaded.
+type shown struct {
+	id, cols, rows, bytes, seq int
+	failed                     bool
+}
 
 // stored is a picture that reached the terminal.
 type stored struct {
@@ -271,7 +277,7 @@ func Run(ctx context.Context, be core.Backend, version, account string, look Loo
 func newModel(ctx context.Context, be core.Backend, theme string) *model {
 	t, ok := FindTheme(theme)
 	m := &model{
-		ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}, saving: map[int64]int{},
+		ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}, saving: map[int64]int{}, drafts: map[int64]string{},
 		jobs: make(chan struct{}, 3), freedAt: map[int]time.Time{}, uploading: map[int]bool{},
 	}
 	m.view, m.leave = context.WithCancel(ctx)
@@ -505,12 +511,14 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.frames == nil {
-			return nil // stays 0, initials or the "[photo]" label are shown
+			// Initials or the "[photo]" label are shown, in the room it held.
+			m.keepView(msg.key.msg, func() { m.images[msg.key] = shown{seq: msg.seq, failed: true} })
+			return nil
 		}
 		// The picture is shown only once it reached the terminal: placeholder
 		// cells drawn before their image may stay blank. An animation plays
 		// in the terminal from then on, without redraws.
-		img := shown{m.nextImage(), msg.cols, msg.rows, termimg.Footprint(msg.frames), msg.seq}
+		img := shown{id: m.nextImage(), cols: msg.cols, rows: msg.rows, bytes: termimg.Footprint(msg.frames), seq: msg.seq}
 		m.uploading[img.id] = true
 		return tea.Sequence(
 			tea.Raw(termimg.Transmit(img.id, img.cols, img.rows, msg.frames[0])+termimg.Play(img.id, msg.gap, msg.frames[1:])),
@@ -804,6 +812,20 @@ func (m *model) startEdit(msg core.Message) tea.Cmd {
 	m.input.CursorEnd()
 	m.revealMessage(msg.ID)
 	return tea.Batch(m.setFocus(focusInput), m.afterScroll())
+}
+
+// draft is what was typed in a chat and not sent. In the open chat, an edit
+// in progress is not: the draft is what the edit put aside.
+func (m *model) draft(chatID int64) string {
+	switch {
+	case chatID != m.openID:
+		return m.drafts[chatID]
+	case m.editing != 0 && m.stash != nil:
+		return m.stash.text
+	case m.editing != 0:
+		return ""
+	}
+	return m.input.Value()
 }
 
 // cancelDraft drops the reply or the edit. A reply keeps what was typed, an
@@ -1148,6 +1170,8 @@ func (m *model) loadPictures() tea.Cmd {
 			continue // no room for a picture, its label is shown
 		}
 		key := imageKey{msg.ChatID, msg.ID}
+		// The room the conversation keeps for it, when its size is known.
+		keptCols, keptRows := m.pictureCells(msg, rw)
 		// A picture sized for a wider pane is fetched again to fit, and
 		// the old one freed.
 		img, seen := m.images[key]
@@ -1174,6 +1198,11 @@ func (m *model) loadPictures() tea.Cmd {
 			if err != nil {
 				return imageMsg{key: key, seq: seq}
 			}
+			// The still may be shaped a little differently from the media:
+			// it is drawn over the room kept, so nothing moves.
+			if keptRows > 0 {
+				cols, rows = keptCols, keptRows
+			}
 			out := imageMsg{key: key, seq: seq, frames: [][]byte{png}, cols: cols, rows: rows}
 			if pic.Clip != nil {
 				if frames, gap, err := termimg.Frames(view, pic.Clip, cols, rows); err == nil {
@@ -1187,6 +1216,20 @@ func (m *model) loadPictures() tea.Cmd {
 		})
 	}
 	return tea.Batch(cmds...)
+}
+
+// pictureCells is the cell area a picture takes in a conversation pane w
+// cells wide, known before it loads from the size of the media. It is none
+// when the picture will not be drawn, or its size is not known.
+func (m *model) pictureCells(msg core.Message, w int) (cols, rows int) {
+	boxCols, boxRows := pictureBox(msg.Picture)
+	maxCols := min(boxCols, w-photoIndent-1)
+	size := msg.PictureSize
+	if !m.graphics || msg.Picture == core.NoPicture || size.X <= 0 || size.Y <= 0 || maxCols < 1 ||
+		m.images[imageKey{msg.ChatID, msg.ID}].failed {
+		return 0, 0
+	}
+	return termimg.Cells(size, maxCols, boxRows)
 }
 
 // loading marks the picture of key as loading and returns the number of
@@ -1342,9 +1385,16 @@ func (m *model) openSelected() tea.Cmd {
 		m.leave() // the pictures still loading there are not needed now
 		m.view, m.leave = context.WithCancel(m.ctx)
 	}
+	// What was typed waits in the chat it was typed in.
+	if d := m.draft(m.openID); d != "" {
+		m.drafts[m.openID] = d
+	}
 	m.openID, m.scroll = chatID, 0
 	m.replyTo, m.editing, m.stash = 0, 0, nil
 	m.input.Reset()
+	m.input.SetValue(m.drafts[chatID])
+	m.input.CursorEnd()
+	delete(m.drafts, chatID)
 	m.setAttach(core.SendRequest{}) // it was meant for the previous chat
 	cmds := []tea.Cmd{m.setFocus(focusInput)}
 	if h := m.histories[chatID]; h == nil {
