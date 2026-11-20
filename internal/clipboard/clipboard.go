@@ -1,7 +1,9 @@
 // Package clipboard reads images from the system clipboard. Terminals only
 // paste text, so an image copied elsewhere has to be fetched with the
-// platform's own tools. It reads the clipboard of the machine tg runs on,
-// which over SSH is not the one in front of the user.
+// platform's own tools, or through the terminal with kitty's clipboard
+// protocol (kitty.go). The tools read the clipboard of the machine tg runs on,
+// which over SSH is not the one in front of the user; the terminal reads the
+// user's own.
 package clipboard
 
 import (
@@ -65,7 +67,7 @@ func unixImage(ctx context.Context) ([]byte, error) {
 		name, args = "wl-paste", []string{"--no-newline", "--type", "image/png"}
 	}
 	if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") == "" {
-		return nil, errors.New("no clipboard here, over SSH paste the image's file path instead")
+		return nil, errors.New("no clipboard here: over SSH, images paste in kitty, or send them with `tg send --file`")
 	}
 	if _, err := exec.LookPath(name); err != nil {
 		return nil, errors.New("reading images from the clipboard needs " + name + ", install it or paste the image's file path")

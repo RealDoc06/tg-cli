@@ -5,6 +5,7 @@ package tui
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	textclip "github.com/atotto/clipboard"
+	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/RealDoc06/tg-cli/internal/clipboard"
 	"github.com/RealDoc06/tg-cli/internal/core"
@@ -83,6 +85,13 @@ type model struct {
 	// pasting is the attachSeq of the clipboard read in progress. While it
 	// is current, enter waits: it would send what the read is replacing.
 	pasting int
+	// termClip is set when the terminal shares its clipboard (OSC 5522).
+	// reply is the answer it is sending, termSeq the attachSeq of the read
+	// it answers, termPW the password of this run's requests.
+	termClip bool
+	reply    *termReply
+	termSeq  int
+	termPW   string
 
 	// images holds the pictures uploaded to the terminal. An entry with ID
 	// 0 is loading, or failed and shows as text.
@@ -162,6 +171,7 @@ func Run(ctx context.Context, be core.Backend, version, account, theme string) e
 		}
 	}()
 	_, err := p.Run()
+	fmt.Fprint(os.Stdout, clipboard.PasteEventsOff)
 
 	if ids := slices.Collect(func(yield func(int) bool) {
 		for _, img := range m.images {
@@ -182,7 +192,7 @@ func Run(ctx context.Context, be core.Backend, version, account, theme string) e
 // is not a theme falls back to the default and says so.
 func newModel(ctx context.Context, be core.Backend, theme string) *model {
 	t, ok := FindTheme(theme)
-	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}}
+	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}, termPW: rand.Text()}
 	if !ok {
 		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", theme, strings.Join(ThemeNames(), ", "))
 	}
@@ -204,7 +214,9 @@ func (m *model) newInput(prompt string) textinput.Model {
 	return in
 }
 
-func (m *model) Init() tea.Cmd { return m.loadChats(nil) }
+func (m *model) Init() tea.Cmd {
+	return tea.Batch(m.loadChats(nil), tea.Raw(clipboard.PasteEventsOn))
+}
 
 // Update handles a message, then fetches the photos that came into view,
 // whatever moved them there.
@@ -348,8 +360,25 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			m.setAttach(core.SendRequest{Photo: msg.png})
 		case msg.text != "":
 			return m.pasteText(msg.text) // no image, ctrl+v pastes text as before
+		case m.termClip && !errors.Is(msg.err, clipboard.ErrNoImage):
+			// No clipboard tools here, as over SSH: ask the terminal, which
+			// has the user's clipboard. It asks the user once per session.
+			m.startRead()
+			return tea.Raw(clipboard.ReadRequest(m.termPW, "tg", clipboard.ListTypes))
 		default:
 			m.status = msg.err.Error() // nothing pasted, any attachment stays as it was
+		}
+		return nil
+
+	case tea.ModeReportMsg:
+		if msg.Mode == clipboard.PasteEventsMode {
+			m.termClip = !msg.Value.IsNotRecognized() && !msg.Value.IsPermanentlyReset()
+		}
+		return nil
+
+	case uv.UnknownOscEvent:
+		if p, ok := clipboard.ParsePacket(string(msg)); ok {
+			return m.termPacket(p)
 		}
 		return nil
 
@@ -519,9 +548,8 @@ func (m *model) setAttach(req core.SendRequest) {
 // pasteImage reads the system clipboard for terminals that only paste text:
 // its image, or else its text.
 func (m *model) pasteImage() tea.Cmd {
-	m.attachSeq++ // only the latest read may land
+	m.startRead()
 	seq := m.attachSeq
-	m.pasting = seq
 	return func() tea.Msg {
 		data, err := clipboard.Image(m.ctx)
 		if err != nil {

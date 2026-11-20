@@ -3,7 +3,9 @@ package tui
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/RealDoc06/tg-cli/internal/core"
@@ -386,5 +389,46 @@ func TestEnterWaitsForTheClipboard(t *testing.T) {
 	m.Update(clipboardMsg{seq: m.attachSeq, png: []byte("b")})
 	if m.readingClipboard() || string(m.attach.Photo) != "b" || m.status != "" {
 		t.Errorf("the read did not finish cleanly, status %q", m.status)
+	}
+}
+
+// In kitty a paste arrives as the list of types on the clipboard, which tg
+// then reads through the terminal. That works over SSH, where the system's
+// clipboard tools see the remote machine's clipboard.
+func TestTerminalPasteAttachesImage(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	m.termClip = true
+	packet := func(meta, payload string) {
+		m.Update(uv.UnknownOscEvent("\x1b]5522;type=read:" + meta + ";" + base64.StdEncoding.EncodeToString([]byte(payload)) + "\x1b\\"))
+	}
+	mime := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+	packet("status=OK:pw="+mime("once"), "")
+	packet("status=DATA:mime="+mime("."), "image/png text/plain")
+	request := m.update(uv.UnknownOscEvent("\x1b]5522;type=read:status=DONE\x1b\\"))
+	if request == nil || !m.readingClipboard() {
+		t.Fatal("the image was not requested")
+	}
+	if raw := fmt.Sprint(request()); !strings.Contains(raw, mime("image/png")) || !strings.Contains(raw, mime("once")) {
+		t.Errorf("request %q does not ask for the image with the paste's password", raw)
+	}
+
+	packet("status=OK", "")
+	packet("status=DATA:mime="+mime("image/png"), "\x89PNG first chunk,")
+	packet("status=DATA:mime="+mime("image/png"), " second chunk")
+	packet("status=DONE", "")
+	if string(m.attach.Photo) != "\x89PNG first chunk, second chunk" || m.readingClipboard() {
+		t.Errorf("attached %q", m.attach.Photo)
+	}
+
+	packet("status=OK", "")
+	packet("status=DATA:mime="+mime("."), "text/plain")
+	packet("status=DONE", "")
+	packet("status=OK", "")
+	packet("status=DATA:mime="+mime("text/plain"), "hello")
+	packet("status=DONE", "")
+	if m.input.Value() != "hello" {
+		t.Errorf("pasted text %q", m.input.Value())
 	}
 }
