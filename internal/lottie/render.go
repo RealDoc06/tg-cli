@@ -108,9 +108,10 @@ func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, 
 	if r.raster.work += layerWork; r.raster.work > workBudget {
 		return
 	}
-	local := frame - l.Start
+	// A layer's own keyframes are in its composition's time. Its start time
+	// only shifts the time of what a precomp holds, as lottie-web does.
 	m := base.mul(world(l, frame, byIndex, 0))
-	opacity := l.Ks.Opacity.scalar(local, 100) / 100
+	opacity := l.Ks.Opacity.scalar(frame, 100) / 100
 	if opacity <= 0 || l.Type == layerNull {
 		return
 	}
@@ -126,7 +127,7 @@ func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, 
 	}
 	switch l.Type {
 	case layerShape:
-		b := builder{frame: local, work: &r.raster.work}
+		b := builder{frame: frame, work: &r.raster.work}
 		b.group(l.Shapes, m, 1)
 		b.draw(r.raster, out)
 	case layerSolid:
@@ -145,7 +146,7 @@ func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, 
 			return
 		}
 		r.inside = append(r.inside, l.RefID)
-		r.layers(out, r.anim.precomps[l.RefID], local/stretch, m, depth+1)
+		r.layers(out, r.anim.precomps[l.RefID], (frame-l.Start)/stretch, m, depth+1)
 		r.inside = r.inside[:len(r.inside)-1]
 	default:
 		return
@@ -154,7 +155,7 @@ func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, 
 		return
 	}
 	if len(l.Masks) > 0 {
-		r.applyMasks(out, l.Masks, local, m)
+		r.applyMasks(out, l.Masks, frame, m)
 	}
 	scaleAlpha(out, opacity)
 	draw.Draw(dst, dst.Rect, out, image.Point{}, draw.Over)
@@ -163,7 +164,7 @@ func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, 
 // world is a layer's transform in its composition, through its parents. In
 // After Effects, parents pass on their transform but not their opacity.
 func world(l *layer, frame float64, byIndex map[int]*layer, depth int) affine {
-	m := l.Ks.matrix(frame - l.Start)
+	m := l.Ks.matrix(frame)
 	if l.Parent != nil && depth < maxDepth {
 		if p := byIndex[*l.Parent]; p != nil && p != l {
 			m = world(p, frame, byIndex, depth+1).mul(m)
@@ -245,7 +246,7 @@ func applyMatte(buf, matte *image.RGBA, mode int) {
 			p := matte.Pix[i : i+4]
 			switch mode {
 			case 3, 4: // premultiplied, so dark and transparent both count as 0
-				v = (0.299*float64(p[0]) + 0.587*float64(p[1]) + 0.114*float64(p[2])) / 255
+				v = (0.2126*float64(p[0]) + 0.7152*float64(p[1]) + 0.0722*float64(p[2])) / 255 // Rec. 709
 			default:
 				v = float64(p[3]) / 255
 			}
@@ -331,7 +332,7 @@ func (b *builder) group(items []shape, m affine, opacity float64) {
 	styles, trims := len(b.activeStyles), len(b.activeTrims)
 	defer func() { b.activeStyles, b.activeTrims = b.activeStyles[:styles], b.activeTrims[:trims] }()
 	for i := range items {
-		if it := &items[i]; it.Type == "tr" {
+		if it := &items[i]; it.Type == "tr" && !it.Hidden {
 			t := it.transform()
 			m = m.mul(t.matrix(b.frame))
 			opacity *= t.Opacity.scalar(b.frame, 100) / 100

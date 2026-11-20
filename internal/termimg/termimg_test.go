@@ -205,17 +205,29 @@ func TestPlayAddsFramesAndLoops(t *testing.T) {
 	if Play(3, time.Second, nil) != "" {
 		t.Error("a still image is animated")
 	}
-	seq := Play(3, 50*time.Millisecond, [][]byte{{1}, {2}})
+	// The second frame spans several chunks, which must all say they carry
+	// a frame.
+	seq := Play(3, 50*time.Millisecond, [][]byte{{1}, bytes.Repeat([]byte{2}, 10000)})
 	commands := regexp.MustCompile(`\x1b_G([^;\x1b]*)`).FindAllStringSubmatch(seq, -1)
-	if len(commands) != 3 {
+	if len(commands) < 4 {
 		t.Fatalf("got %d commands", len(commands))
 	}
-	for _, c := range commands[:2] {
-		if !strings.HasPrefix(c[1], "a=f,") || !strings.Contains(c[1], "i=3,") || !strings.Contains(c[1], "z=50") {
-			t.Errorf("frame command %q", c[1])
+	starts := 0
+	for _, c := range commands[:len(commands)-1] {
+		if !strings.HasPrefix(c[1], "a=f,") {
+			t.Errorf("frame chunk %q", c[1])
+		}
+		if strings.Contains(c[1], "i=3,") {
+			starts++
+			if !strings.Contains(c[1], "z=50") {
+				t.Errorf("frame without its gap: %q", c[1])
+			}
 		}
 	}
-	if loop := commands[2][1]; !strings.HasPrefix(loop, "a=a,") || !strings.Contains(loop, "s=3") || !strings.Contains(loop, "v=1") {
+	if starts != 2 {
+		t.Errorf("%d frames started, want 2", starts)
+	}
+	if loop := commands[len(commands)-1][1]; !strings.HasPrefix(loop, "a=a,") || !strings.Contains(loop, "s=3") || !strings.Contains(loop, "v=1") {
 		t.Errorf("loop command %q", loop)
 	}
 }

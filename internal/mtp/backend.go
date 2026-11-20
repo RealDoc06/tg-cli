@@ -468,7 +468,8 @@ func playable(doc *tg.Document) bool {
 	case a.animated:
 		return true
 	}
-	return a.video != nil && a.video.Duration <= clipMaxSeconds
+	// Round video messages keep their still: they talk, and play muted.
+	return a.video != nil && !a.video.RoundMessage && a.video.Duration <= clipMaxSeconds
 }
 
 // fetchImage downloads a small file into memory, a few at a time.

@@ -459,6 +459,10 @@ func trimPaths(paths []polyline, start, end, offset float64) [][]polyline {
 	for i, p := range paths {
 		from, to := at/total, (at+lengths[i])/total
 		at += lengths[i]
+		if ranges[0][0] <= from && to <= ranges[0][1] {
+			out[i] = []polyline{p} // kept whole, a closed path stays closed
+			continue
+		}
 		var pieces []polyline
 		for _, r := range ranges {
 			a, b := math.Max(r[0], from), math.Min(r[1], to)

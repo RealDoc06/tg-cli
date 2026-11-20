@@ -102,7 +102,7 @@ func TestKeyframes(t *testing.T) {
 		if err := p.UnmarshalJSON([]byte(`{"a":1,"k":` + c.k + `}`)); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if got := p.scalar(c.frame, -1); math.Abs(got-c.want) > 0.1 {
+		if got := p.scalar(c.frame, -1); !(math.Abs(got-c.want) <= 0.1) {
 			t.Errorf("%s: %g at frame %g, want %g", c.name, got, c.frame, c.want)
 		}
 	}
@@ -203,6 +203,40 @@ func TestHostileFilesAreBounded(t *testing.T) {
 		if _, err := parse(data).Render(0, 100, 100); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// A layer's keyframes are in its composition's time, whatever its start
+// time: that only shifts the time inside a precomp.
+func TestStartTimeShiftsOnlyPrecomps(t *testing.T) {
+	fade := `"st":20,"ks":{"o":{"a":1,"k":[{"t":30,"s":[0],"o":{"x":0,"y":0},"i":{"x":1,"y":1}},{"t":50,"s":[100]}]}}`
+	layer := strings.Replace(shapes("", rc(50, 50, 100, 100), red), `"ks":{},`, fade+",", 1)
+	a, err := Parse([]byte(`{"fr":60,"ip":0,"op":60,"w":100,"h":100,"layers":[` + layer + `]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := a.Render(40, 100, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alpha := pixel(img, 50, 50)[3]; alpha < 120 || alpha > 135 {
+		t.Errorf("opacity %d/255 at frame 40, want half", alpha)
+	}
+
+	// Inside a precomp starting at 20, the same layer without a start time
+	// is at its frame 20 when the composition is at 40.
+	inner := strings.Replace(layer, `"st":20,`, ``, 1)
+	inner = strings.Replace(inner, `"t":30`, `"t":10`, 1)
+	inner = strings.Replace(inner, `"t":50`, `"t":30`, 1)
+	a, err = Parse([]byte(`{"fr":60,"ip":0,"op":60,"w":100,"h":100,"layers":[{"ty":0,"refId":"p","st":20,"ip":0,"op":60,"ks":{}}],"assets":[{"id":"p","layers":[` + inner + `]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img, err = a.Render(40, 100, 100); err != nil {
+		t.Fatal(err)
+	}
+	if alpha := pixel(img, 50, 50)[3]; alpha < 120 || alpha > 135 {
+		t.Errorf("precomp: opacity %d/255 at frame 40, want half", alpha)
 	}
 }
 

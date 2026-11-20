@@ -89,7 +89,7 @@ func Placeholder(id, cols, rows int) []string {
 // creates the virtual placement the placeholder cells refer to.
 func Transmit(id, cols, rows int, pngData []byte) string {
 	var b strings.Builder
-	upload(&b, fmt.Sprintf("f=100,a=T,U=1,q=2,i=%d,c=%d,r=%d", id, cols, rows), pngData)
+	upload(&b, fmt.Sprintf("f=100,a=T,U=1,q=2,i=%d,c=%d,r=%d", id, cols, rows), "", pngData)
 	return b.String()
 }
 
@@ -104,16 +104,17 @@ func Play(id int, gap time.Duration, frames [][]byte) string {
 	ms := max(1, gap.Milliseconds())
 	var b strings.Builder
 	for _, frame := range frames {
-		upload(&b, fmt.Sprintf("a=f,f=100,q=2,i=%d,z=%d", id, ms), frame)
+		upload(&b, fmt.Sprintf("a=f,f=100,q=2,i=%d,z=%d", id, ms), "a=f,", frame)
 	}
 	// The first frame's gap, then run in an endless loop (v=1).
 	b.WriteString(passthrough(fmt.Sprintf("\x1b_Ga=a,q=2,i=%d,r=1,z=%d,s=3,v=1\x1b\\", id, ms)))
 	return b.String()
 }
 
-// upload writes a graphics command carrying PNG data, cut in chunks: only
-// the first one carries the keys.
-func upload(b *strings.Builder, keys string, pngData []byte) {
+// upload writes a graphics command carrying PNG data, cut in chunks: the
+// first carries the keys, the others only cont, which the protocol wants to
+// be "a=f," for animation frames and empty for images.
+func upload(b *strings.Builder, keys, cont string, pngData []byte) {
 	const chunk = 4096
 	enc := base64.StdEncoding.EncodeToString(pngData)
 	for first := true; first || enc != ""; first = false {
@@ -125,7 +126,7 @@ func upload(b *strings.Builder, keys string, pngData []byte) {
 		if first {
 			b.WriteString(passthrough(fmt.Sprintf("\x1b_G%s,m=%d;%s\x1b\\", keys, more, enc[:n])))
 		} else {
-			b.WriteString(passthrough(fmt.Sprintf("\x1b_Gm=%d;%s\x1b\\", more, enc[:n])))
+			b.WriteString(passthrough(fmt.Sprintf("\x1b_G%sm=%d;%s\x1b\\", cont, more, enc[:n])))
 		}
 		enc = enc[n:]
 	}
