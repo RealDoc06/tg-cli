@@ -15,6 +15,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/RealDoc06/tg-cli/internal/core"
 	"github.com/RealDoc06/tg-cli/internal/termimg"
@@ -191,7 +192,13 @@ func (m *model) newInput(prompt string) textinput.Model {
 	return in
 }
 
-func (m *model) Init() tea.Cmd { return m.loadChats(nil) }
+// Init enters the alternate screen before anything else, then loads the
+// chats. Bubble Tea would only switch on its first frame, and kitty keeps one
+// image store per screen: a picture sent before the switch, like an initials
+// badge that is ready at once, would never show.
+func (m *model) Init() tea.Cmd {
+	return tea.Sequence(tea.Raw(ansi.SetModeAltScreenSaveCursor), m.loadChats(nil))
+}
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -751,11 +758,20 @@ func (m *model) afterMove() tea.Cmd {
 	}
 	var cmds []tea.Cmd
 	for _, c := range chats[m.top:min(len(chats), m.top+rows)] {
-		if _, seen := m.avatars[c.ID]; seen || c.PhotoID == 0 {
+		if _, seen := m.avatars[c.ID]; seen {
 			continue
 		}
 		m.avatars[c.ID] = 0
 		chat := *c
+		if chat.PhotoID == 0 {
+			// No photo: the initials badge, drawn as an image so they center.
+			bg, fg := m.st.peer(chat.ID), m.st.theme.Background
+			cmds = append(cmds, func() tea.Msg {
+				png, _ := termimg.Initials(initials(chat.Title), bg, fg, avatarPx)
+				return avatarMsg{chat.ID, png}
+			})
+			continue
+		}
 		cmds = append(cmds, func() tea.Msg {
 			data, err := m.be.Avatar(m.ctx, chat)
 			if err != nil {

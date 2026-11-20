@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"image"
+	"image/color"
 	"image/png"
 	"regexp"
 	"strings"
@@ -88,3 +89,38 @@ func TestAvatarIsRoundAndSquare(t *testing.T) {
 		t.Error("center is not opaque")
 	}
 }
+
+// The initials must sit in the middle of the badge, which text in cells
+// cannot do.
+func TestInitialsAreCentered(t *testing.T) {
+	const size = 96
+	bg, fg := color.NRGBA{200, 50, 50, 255}, color.NRGBA{255, 255, 255, 255}
+	data, err := Initials("SM", bg, fg, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Dx() != size || img.Bounds().Dy() != size {
+		t.Fatalf("badge is %v, want %dx%d", img.Bounds(), size, size)
+	}
+	ink := image.Rectangle{Min: image.Pt(size, size)}
+	for y := range size {
+		for x := range size {
+			if r, _, _, _ := img.At(x, y).RGBA(); r>>8 != 200 { // not the background
+				ink = ink.Union(image.Rect(x, y, x+1, y+1))
+			}
+		}
+	}
+	if ink.Empty() {
+		t.Fatal("no text was drawn")
+	}
+	cx, cy := (ink.Min.X+ink.Max.X)/2, (ink.Min.Y+ink.Max.Y)/2
+	if abs(cx-size/2) > 2 || abs(cy-size/2) > 2 {
+		t.Errorf("text centered at (%d, %d), want (%d, %d)", cx, cy, size/2, size/2)
+	}
+}
+
+func abs(n int) int { return max(n, -n) }

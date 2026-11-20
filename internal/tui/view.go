@@ -28,9 +28,12 @@ func (m *model) layout() (left, right int) {
 	return left, m.width - left - 1
 }
 
-// A chat takes two rows in the list, and a blank one sets it apart from the
-// next: chat k starts on row 1+chatStride*k, below the list's title.
-const chatStride = 3
+// A chat takes two rows in the list, and chatGap blank ones set it apart
+// from the next: chat k starts on row 1+chatStride*k, below the list's title.
+const (
+	chatGap    = 1
+	chatStride = 2 + chatGap
+)
 
 // chatsDrawn is how many chats fit in the list, possibly none. listRows is
 // the same at least one, for paging and keeping the selection in view.
@@ -193,11 +196,11 @@ func (m *model) chatList(w, h int) []string {
 		rows = append(rows, fit(" "+m.st.muted.Render(hint), w))
 	}
 	for i := m.top; i < len(chats); i++ {
-		gap := min(i-m.top, 1) // none above the first
+		gap := min(i-m.top, 1) * chatGap // none above the first
 		if len(rows)+gap+2 > h {
 			break
 		}
-		if gap > 0 {
+		for range gap {
 			rows = append(rows, strings.Repeat(" ", w))
 		}
 		rows = append(rows, m.chatRow(chats[i], i == m.sel, w)...)
