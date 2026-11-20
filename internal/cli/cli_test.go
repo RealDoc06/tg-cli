@@ -283,6 +283,19 @@ func TestTheme(t *testing.T) {
 	}
 }
 
+// Spacing takes on or off and nothing else, and lands in config.json.
+func TestSpacing(t *testing.T) {
+	if err := run(t, "config", "spacing", "on"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t, "config", "spacing", "yes"); !errors.As(err, new(errUsage)) {
+		t.Errorf("spacing yes: %v", err)
+	}
+	if cfg, _ := config.Load(); !cfg.SpacedMessages {
+		t.Error("spacing on did not reach config.json")
+	}
+}
+
 func TestAccounts(t *testing.T) {
 	atTerminal(t, true)
 	for _, login := range [][]string{{"login"}, {"login", "--account", "work"}} {
@@ -516,5 +529,18 @@ func TestLoginKeepsTheDefaultAccount(t *testing.T) {
 	}
 	if err := run(t, "config", "read-only", "on", "--account", "tpyo"); err == nil {
 		t.Error("a guardrail was set on an account that does not exist")
+	}
+}
+
+// A coding agent's variable makes tg refuse what is for people, even at a
+// terminal, and the refusal names it so a person who inherited it knows why.
+func TestAgentVariableIsNamed(t *testing.T) {
+	for _, name := range agentVars {
+		t.Setenv(name, "")
+	}
+	t.Setenv("CODEX_THREAD_ID", "019a")
+	err := needPerson("logging out")
+	if err == nil || !strings.Contains(err.Error(), "CODEX_THREAD_ID is set") {
+		t.Errorf("refusal: %v", err)
 	}
 }

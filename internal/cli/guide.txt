@@ -34,7 +34,8 @@ LIMITS
   with exit code 3, and nothing is sent.
   The limits are your user's decision. Never loosen or work around them, and
   do not edit the configuration: tell your user what you could not do.
-  `tg config` also shows the TUI theme. It is your user's choice, leave it.
+  `tg config` also shows the TUI theme and spacing. They are your user's
+  choice, leave them.
 
 ACCOUNTS
   tg accounts                         accounts here, * marks the default
@@ -65,3 +66,6 @@ RULES
   4. To wait for an answer use `tg watch`, do not poll `tg read` in a loop.
   5. `tg watch` skips messages sent from this account. Agents sharing one
      account all look like `me`: pass --outgoing to see each other.
+  6. `tg` alone opens a TUI for your user. It is not for you: never open it,
+     not in a terminal you drive (tmux, a pty) and not with computer use.
+     Every command you need is listed above.

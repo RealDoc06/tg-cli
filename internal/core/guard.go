@@ -71,6 +71,13 @@ func (g *guarded) Send(ctx context.Context, chatID int64, req SendRequest) (Mess
 	return g.Backend.Send(ctx, chatID, req)
 }
 
+func (g *guarded) Edit(ctx context.Context, chatID int64, msgID int, text string) error {
+	if err := g.check("editing", chatID); err != nil {
+		return err
+	}
+	return g.Backend.Edit(ctx, chatID, msgID, text)
+}
+
 func (g *guarded) MarkRead(ctx context.Context, chatID int64, maxID int) error {
 	if err := g.check("marking as read", chatID); err != nil {
 		return err

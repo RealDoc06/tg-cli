@@ -227,14 +227,36 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 		time.AfterFunc(time.Second, func() {
 			b.mu.Lock()
 			b.messages[chatID] = append(b.messages[chatID], reply)
+			ev := core.Event{Kind: core.EventMessage, Chat: *chat, Message: reply}
 			b.mu.Unlock()
 			select {
-			case b.events <- core.Event{Kind: core.EventMessage, Chat: *chat, Message: reply}:
+			case b.events <- ev:
 			default:
 			}
 		})
 	}
 	return m, nil
+}
+
+func (b *Backend) Edit(_ context.Context, chatID int64, msgID int, text string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	msgs := b.messages[chatID]
+	i := slices.IndexFunc(msgs, func(m core.Message) bool { return m.ID == msgID })
+	switch {
+	case i < 0:
+		return fmt.Errorf("no message %d in chat %d", msgID, chatID)
+	case !msgs[i].Out:
+		return fmt.Errorf("message %d was not sent by this account, only your own messages can be edited", msgID)
+	}
+	// Edit a copy: chat previews handed out earlier point into the old one.
+	msgs = slices.Clone(msgs)
+	msgs[i].Text, msgs[i].Edited = text, true
+	b.messages[chatID] = msgs
+	if chat, ok := b.chat(chatID); ok && chat.Last != nil && chat.Last.ID == msgID {
+		chat.Last = &msgs[i]
+	}
+	return nil
 }
 
 func (b *Backend) MarkRead(_ context.Context, chatID int64, _ int) error {

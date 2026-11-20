@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -78,17 +79,24 @@ func upload(m *model, cmd tea.Cmd) {
 func TestViewFillsTheTerminal(t *testing.T) {
 	for _, size := range [][2]int{{120, 30}, {80, 24}, {72, 10}, {50, 20}, {20, 6}} {
 		m := loaded(t, size[0], size[1])
-		for _, opened := range []bool{false, true} {
-			if opened {
+		for _, state := range []string{"list", "opened", "replying with a menu open"} {
+			switch state {
+			case "opened":
 				open(t, m, 1)
+			case "replying with a menu open":
+				m.pickReply(-1)
+				m.openMenu(m.width-1, m.height-5) // the newest message
+				if m.menu == nil && size[1] >= 10 {
+					t.Errorf("%v: no menu opened on the newest message", size)
+				}
 			}
 			rows := strings.Split(m.View().Content, "\n")
 			if len(rows) != size[1] {
-				t.Errorf("%v opened=%v: %d rows", size, opened, len(rows))
+				t.Errorf("%v %s: %d rows", size, state, len(rows))
 			}
 			for i, row := range rows {
 				if w := ansi.StringWidth(row); w != size[0] {
-					t.Errorf("%v opened=%v: row %d is %d cells: %q", size, opened, i, w, ansi.Strip(row))
+					t.Errorf("%v %s: row %d is %d cells: %q", size, state, i, w, ansi.Strip(row))
 				}
 			}
 		}
@@ -134,6 +142,30 @@ func TestOpenChatDedupesAndStaysRead(t *testing.T) {
 
 	if got := len(m.histories[chat.ID].msgs); got != before+1 {
 		t.Errorf("history grew by %d messages, want 1", got-before)
+	}
+	// An edit of a message older than the loaded page stays out of it.
+	old := core.Message{ID: 1, ChatID: chat.ID, From: "Someone", Date: time.Now(), Text: "old, edited", Edited: true}
+	m.Update(eventMsg(core.Event{Kind: core.EventEdit, Chat: chat, Message: old}))
+	if slices.ContainsFunc(m.histories[chat.ID].msgs, func(o core.Message) bool { return o.ID == old.ID }) {
+		t.Error("an edit of an unloaded older message was added to the history")
+	}
+	// A new message arriving out of order is still shown.
+	late := core.Message{ID: 9000, ChatID: chat.ID, From: "Someone", Date: time.Now(), Text: "late"}
+	m.Update(eventMsg(core.Event{Kind: core.EventMessage, Chat: chat, Message: late}))
+	msgs := m.histories[chat.ID].msgs
+	if !slices.ContainsFunc(msgs, func(o core.Message) bool { return o.ID == late.ID }) {
+		t.Error("a new message that arrived out of order was dropped")
+	}
+	if !slices.IsSortedFunc(msgs, func(a, b core.Message) int { return cmp.Compare(a.ID, b.ID) }) {
+		t.Error("the history is not in message order")
+	}
+	// One older than the loaded page waits for the older pages, which load
+	// from the oldest message shown and would skip what lies between.
+	oldest := msgs[0].ID
+	m.histories[chat.ID].done = false // the server has older pages
+	m.Update(eventMsg(core.Event{Kind: core.EventMessage, Chat: chat, Message: core.Message{ID: oldest - 1, ChatID: chat.ID, Text: "older"}}))
+	if m.histories[chat.ID].msgs[0].ID != oldest {
+		t.Error("a message older than the loaded page was added to it")
 	}
 	if unread := m.chat(chat.ID).Unread; unread != 0 {
 		t.Errorf("open chat has %d unread", unread)
@@ -455,5 +487,265 @@ func TestTerminalPasteAttachesImage(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "kitty's paste key") {
 		t.Errorf("status %q", m.status)
+	}
+}
+
+// screenRow is the row the text is drawn on, -1 when it is not on screen.
+func screenRow(m *model, text string) int {
+	return slices.IndexFunc(strings.Split(m.View().Content, "\n"), func(row string) bool {
+		return strings.Contains(ansi.Strip(row), text)
+	})
+}
+
+// A right click must act on the message under the pointer, and an edit must
+// reach the backend and show at once.
+func TestRightClickEditsTheClickedMessage(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	const original = "I'll move the media VM back tonight"
+	y := screenRow(m, original)
+	m.Update(tea.MouseClickMsg{X: 90, Y: y, Button: tea.MouseRight})
+	if m.menu == nil || m.menu.msg.Text != original {
+		t.Fatalf("menu: %+v", m.menu)
+	}
+	i := slices.IndexFunc(m.menu.items, func(item menuItem) bool { return item.label == "Edit" })
+	m.Update(tea.MouseClickMsg{X: m.menu.x, Y: m.menu.y + i, Button: tea.MouseLeft})
+	if m.menu != nil || m.input.Value() != original {
+		t.Fatalf("after picking Edit: menu %v, composer %q", m.menu, m.input.Value())
+	}
+
+	m.input.SetValue("moving it at 9pm")
+	cmd := m.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.Update(cmd())
+	if y := screenRow(m, "moving it at 9pm (edited)"); y < 0 {
+		t.Error("the edit is not on screen")
+	}
+	saved, _ := m.be.History(m.ctx, m.openID, core.HistoryQuery{Limit: historyPage})
+	if !slices.ContainsFunc(saved, func(msg core.Message) bool { return msg.Text == "moving it at 9pm" && msg.Edited }) {
+		t.Error("the backend did not get the edit")
+	}
+}
+
+// ctrl+up and ctrl+down walk the reply through the messages, as in Telegram,
+// and the message sent answers the one picked.
+func TestCtrlArrowsPickTheReply(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	msgs := m.histories[m.openID].msgs
+	up := tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModCtrl}
+	down := tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModCtrl}
+
+	m.Update(up)
+	m.Update(up)
+	if want := msgs[len(msgs)-2].ID; m.replyTo != want {
+		t.Fatalf("after two ctrl+up the reply is to %d, want %d", m.replyTo, want)
+	}
+	m.Update(down)
+	m.Update(down)
+	if m.replyTo != 0 {
+		t.Fatalf("going past the newest message kept the reply to %d", m.replyTo)
+	}
+
+	// While editing, picking a reply would throw the changes away.
+	own, _ := m.lastOwn()
+	m.startEdit(own)
+	m.Update(up)
+	if m.editing != own.ID || m.replyTo != 0 {
+		t.Fatalf("ctrl+up during an edit: editing %d, reply to %d", m.editing, m.replyTo)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	m.Update(up)
+	for _, r := range "on it" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	cmd := m.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	sent := cmd().(sentMsg)
+	if want := msgs[len(msgs)-1].ID; sent.msg.ReplyTo != want || m.replyTo != 0 {
+		t.Errorf("sent a reply to %d, want %d; reply left set to %d", sent.msg.ReplyTo, want, m.replyTo)
+	}
+}
+
+// The composer is one line. Editing must not join a message's lines, and an
+// edit must give back the draft it replaced.
+func TestEditKeepsLinesAndDraft(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	h := m.histories[m.openID]
+	for _, text := range []string{"line one\nline two", "decode failed: \uFFFD"} {
+		h.msgs = append(h.msgs, core.Message{ID: 9999, ChatID: m.openID, Out: true, Date: time.Now(), Text: text})
+		m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+		if m.editing != 0 || m.status == "" {
+			t.Fatalf("%q, which the composer would change, was opened for editing", text)
+		}
+		h.msgs = h.msgs[:len(h.msgs)-1]
+	}
+
+	m.input.SetValue("half typed")
+	msg, _ := m.lastOwn()
+	m.startEdit(msg)
+	if m.input.Value() != msg.Text {
+		t.Fatalf("composer holds %q", m.input.Value())
+	}
+	if cmd := m.update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Error("an unchanged edit was sent")
+	}
+	if m.input.Value() != "half typed" {
+		t.Errorf("the draft became %q", m.input.Value())
+	}
+}
+
+// Saving an edit puts the draft and its reply back at once, and nothing is
+// sent until the save is done. A failed edit comes back over the draft, and
+// cancelling it gives the draft back again.
+func TestEditGivesTheDraftBack(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		m := loaded(t, 120, 30)
+		open(t, m, 1)
+		msgs := m.histories[m.openID].msgs
+		replyTo := msgs[len(msgs)-1].ID
+		m.pickReply(-1)
+		m.input.SetValue("half typed")
+		own, _ := m.lastOwn()
+		m.startEdit(own)
+		m.input.SetValue("new text")
+
+		enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+		save := m.update(enter)
+		draftBack := func(when string) {
+			t.Helper()
+			if m.editing != 0 || m.input.Value() != "half typed" || m.replyTo != replyTo {
+				t.Errorf("fails=%v, %s: editing %d, composer %q replying to %d", fails, when, m.editing, m.input.Value(), m.replyTo)
+			}
+		}
+		draftBack("while saving")
+		if cmd := m.update(enter); cmd != nil {
+			t.Fatal("enter while the edit is saved sent the draft")
+		}
+
+		result := save().(editedMsg)
+		if fails {
+			result.err = errors.New("MESSAGE_EDIT_TIME_EXPIRED")
+		}
+		m.Update(result)
+		if !fails {
+			draftBack("after the save")
+			continue
+		}
+		if m.editing != own.ID || m.input.Value() != "new text" {
+			t.Fatalf("after the failure: editing %d, composer %q", m.editing, m.input.Value())
+		}
+		m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		draftBack("after cancelling the failed edit")
+	}
+}
+
+// A save makes enter wait in its own chat only, until every save there is
+// done, however saves in other chats overlap with it.
+func TestSaveBlocksOnlyItsChat(t *testing.T) {
+	m := loaded(t, 120, 30)
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	saveIn := func(i int) tea.Cmd {
+		t.Helper()
+		open(t, m, i)
+		own, ok := m.lastOwn()
+		if !ok {
+			t.Fatalf("chat %d has no message of its own", i)
+		}
+		m.startEdit(own)
+		m.input.SetValue("edited")
+		cmd := m.update(enter)
+		return cmd
+	}
+	saveA := saveIn(1)
+	saveIn(2) // still saving when A's result arrives
+
+	open(t, m, 1)
+	m.input.SetValue("hi")
+	if cmd := m.update(enter); cmd != nil {
+		t.Fatal("enter sent while this chat's edit is saved")
+	}
+	open(t, m, 3)
+	m.input.SetValue("hi")
+	if cmd := m.update(enter); cmd == nil {
+		t.Error("enter waited in a chat with nothing being saved")
+	}
+	m.Update(saveA())
+	open(t, m, 1)
+	m.input.SetValue("hi")
+	if cmd := m.update(enter); cmd == nil {
+		t.Error("enter still waits after the save is done")
+	}
+}
+
+// A message that got shorter must not leave the scrolled pane blank.
+func TestShrunkContentStaysOnScreen(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	m.scroll = 1000 // far above what is loaded, as after a long message shrank
+	if screenRow(m, "anyone else seeing the NAS") < 0 {
+		t.Error("the conversation is blank")
+	}
+}
+
+// A click on a chat's rows opens that chat, a click on the gap between two
+// chats opens neither.
+func TestClickOpensTheChatUnderIt(t *testing.T) {
+	m := loaded(t, 120, 30)
+	second := m.visible()[1]
+	y := screenRow(m, second.Title)
+	m.Update(tea.MouseClickMsg{X: 10, Y: y + 2, Button: tea.MouseLeft}) // the gap below it
+	if m.openID != 0 {
+		t.Fatalf("a click on the gap opened chat %d", m.openID)
+	}
+	// Below the last chat drawn, where the next one would go if it fit.
+	if rows := m.listRows(); len(m.visible()) > rows {
+		m.Update(tea.MouseClickMsg{X: 10, Y: 1 + chatStride*rows, Button: tea.MouseLeft})
+		if m.openID != 0 {
+			t.Fatalf("a click below the list opened chat %d, which is not drawn", m.openID)
+		}
+	} else {
+		t.Fatal("the demo chats are expected to overflow the list")
+	}
+	m.Update(tea.MouseClickMsg{X: 10, Y: y + 1, Button: tea.MouseLeft})
+	if m.openID != second.ID {
+		t.Errorf("opened chat %d, want %q", m.openID, second.Title)
+	}
+
+	// Too short to draw any chat: nothing is there to click.
+	tiny := loaded(t, 120, 3)
+	tiny.Update(tea.MouseClickMsg{X: 10, Y: 1, Button: tea.MouseLeft})
+	if tiny.openID != 0 {
+		t.Errorf("a click in a list too short for any chat opened chat %d", tiny.openID)
+	}
+}
+
+// Messages are packed unless spacing is on, which sets them apart.
+func TestSpacingSetsMessagesApart(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	blanks := func() int {
+		lines := m.messageLines(m.histories[m.openID], 80)
+		return len(slices.DeleteFunc(lines, func(l msgLine) bool { return l.text != "" }))
+	}
+	if n := blanks(); n != 0 {
+		t.Errorf("packed by default, got %d blank lines", n)
+	}
+	m.spaced = true
+	if blanks() == 0 {
+		t.Error("spacing on left no gap between messages")
+	}
+}
+
+// An edit changes the text only: it cannot start while a pasted image is
+// still being read, which would attach to it.
+func TestEditWaitsForTheClipboard(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	m.startRead()
+	own, _ := m.lastOwn()
+	m.startEdit(own)
+	if m.editing != 0 || m.status != waitClipboard {
+		t.Errorf("edit started during a clipboard read: editing %d, status %q", m.editing, m.status)
 	}
 }

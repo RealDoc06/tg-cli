@@ -28,10 +28,89 @@ func (m *model) layout() (left, right int) {
 	return left, m.width - left - 1
 }
 
-// listRows is how many chats fit in the list, messageRows how many lines of
-// conversation fit above the composer.
-func (m *model) listRows() int    { return max(1, (m.height-2)/2) }
-func (m *model) messageRows() int { return max(1, m.height-3) }
+// A chat takes two rows in the list, and chatGap blank ones set it apart
+// from the next: chat k starts on row 1+chatStride*k, below the list's title.
+const (
+	chatGap    = 1
+	chatStride = 2 + chatGap
+)
+
+// chatsDrawn is how many chats fit in the list, possibly none. listRows is
+// the same at least one, for paging and keeping the selection in view.
+func (m *model) chatsDrawn() int { return max(0, (m.height-1)/chatStride) }
+func (m *model) listRows() int   { return max(1, m.chatsDrawn()) }
+
+// The conversation pane is, top to bottom: the title and a gap, the messages,
+// a gap, the reply or edit being written when there is one, and the composer.
+const messagesTop = 2
+
+func (m *model) draftRows() int {
+	if m.replyTo != 0 || m.editing != 0 {
+		return 1
+	}
+	return 0
+}
+
+// messageRows is how many lines of conversation fit.
+func (m *model) messageRows() int { return max(1, m.height-1-messagesTop-m.draftRows()-2) }
+
+// shown picks the n lines of conversation that are on screen: lines[start:end],
+// drawn below pad empty rows. overflow is how many rows at the top of the pane
+// a tiny terminal cuts off.
+func (m *model) shown(n int) (start, end, pad, overflow int) {
+	view := m.messageRows()
+	// Clamped here as well: a message that got shorter while the pane was
+	// scrolled must not leave it blank.
+	end = max(0, n-min(m.scroll, max(0, n-view)))
+	start = max(0, end-view)
+	overflow = max(0, messagesTop+view+m.draftRows()+2-(m.height-1))
+	return start, end, view - (end - start), overflow
+}
+
+// messageAt is the message drawn on screen row y.
+func (m *model) messageAt(y int) (core.Message, bool) {
+	h := m.histories[m.openID]
+	_, rw := m.layout()
+	if h == nil || !h.loaded || rw == 0 {
+		return core.Message{}, false
+	}
+	lines := m.messageLines(h, rw)
+	start, end, pad, overflow := m.shown(len(lines))
+	i := start + y - (messagesTop - overflow) - pad
+	if i < start || i >= end || lines[i].msg < 0 {
+		return core.Message{}, false
+	}
+	return h.msgs[lines[i].msg], true
+}
+
+// revealMessage scrolls the conversation so message id is on screen.
+func (m *model) revealMessage(id int) {
+	h := m.histories[m.openID]
+	_, rw := m.layout()
+	if h == nil || rw == 0 {
+		return
+	}
+	lines := m.messageLines(h, rw)
+	first, last := -1, -1
+	for i, l := range lines {
+		if l.msg >= 0 && h.msgs[l.msg].ID == id {
+			last = i
+			if first < 0 {
+				first = i
+			}
+		}
+	}
+	if first < 0 {
+		return
+	}
+	if end := len(lines) - m.scroll; last >= end {
+		m.scroll = len(lines) - 1 - last
+	}
+	if start := len(lines) - m.scroll - m.messageRows(); first < start {
+		m.scroll = len(lines) - first - m.messageRows()
+	}
+	m.scroll = max(0, m.scroll)
+}
 
 func (m *model) View() tea.View {
 	var v tea.View
@@ -66,6 +145,18 @@ func (m *model) View() tea.View {
 		}
 	}
 	rows = append(rows, m.statusLine())
+	if m.menu != nil {
+		w := menuWidth(m.menu.items)
+		for i, item := range m.menu.items {
+			style := m.st.menu
+			if i == m.menu.sel {
+				style = m.st.menuSel
+			}
+			if y := m.menu.y + i; y < len(rows) {
+				rows[y] = overlay(rows[y], style.Render(fit(" "+item.label, w)), m.menu.x, m.width)
+			}
+		}
+	}
 	v.SetContent(strings.Join(rows, "\n"))
 
 	// The terminal's own cursor marks the focused input, so nothing blinks
@@ -88,7 +179,8 @@ func (m *model) View() tea.View {
 	return v
 }
 
-// chatList renders the filter line followed by two lines per chat.
+// chatList renders the filter line followed by two lines per chat, set apart
+// by chatGap blank ones.
 func (m *model) chatList(w, h int) []string {
 	rows := make([]string, 0, h)
 	switch {
@@ -107,7 +199,14 @@ func (m *model) chatList(w, h int) []string {
 		}
 		rows = append(rows, fit(" "+m.st.muted.Render(hint), w))
 	}
-	for i := m.top; i < len(chats) && len(rows)+1 < h; i++ {
+	for i := m.top; i < len(chats); i++ {
+		gap := min(i-m.top, 1) * chatGap // none above the first
+		if len(rows)+gap+2 > h {
+			break
+		}
+		for range gap {
+			rows = append(rows, strings.Repeat(" ", w))
+		}
 		rows = append(rows, m.chatRow(chats[i], i == m.sel, w)...)
 	}
 	for len(rows) < h {
@@ -149,16 +248,19 @@ func (m *model) chatRow(c *core.Chat, selected bool, w int) []string {
 		badge = m.st.accent.Bold(true).Render(fmt.Sprint(c.Unread))
 	}
 
+	// The selection bar's column on the left is mirrored by a margin on the
+	// right, so the row sits centered in the sidebar.
 	avatar := m.avatar(c)
-	text := w - 1 - avatarCols - 1
+	text := w - 1 - avatarCols - 1 - 1
 	return []string{
-		bar + avatar[0] + " " + spread(title, stamp, text),
-		bar + avatar[1] + " " + spread(m.st.muted.Render(preview), badge, text),
+		bar + avatar[0] + " " + spread(title, stamp, text) + " ",
+		bar + avatar[1] + " " + spread(m.st.muted.Render(preview), badge, text) + " ",
 	}
 }
 
-// avatar returns the two lines of a chat's picture: the real image when the
-// terminal can draw it and it is loaded, a colored initials badge otherwise.
+// avatar returns the two lines of a chat's picture: the photo or initials
+// badge uploaded to the terminal when it can draw them, colored initials in
+// cells otherwise.
 func (m *model) avatar(c *core.Chat) []string {
 	if img := m.images[imageKey{chat: c.ID}]; img.id != 0 {
 		return termimg.Placeholder(img.id, avatarCols, avatarRows)
@@ -192,19 +294,23 @@ func (m *model) conversation(w, h int) []string {
 		title += m.st.muted.Render("  @" + c.Username)
 	}
 	rows = append(rows, spread(title, m.st.muted.Render(string(c.Kind))+" ", w))
+	rows = append(rows, strings.Repeat(" ", w))
 
 	lines := m.messageLines(hist, w)
 	if !hist.loaded {
 		lines = []msgLine{{m.st.muted.Render(" loading"), -1}}
 	}
-	view := h - 2
-	end := max(0, len(lines)-m.scroll)
-	start := max(0, end-view)
-	for range view - (end - start) {
+	start, end, pad, overflow := m.shown(len(lines))
+	for range pad {
 		rows = append(rows, strings.Repeat(" ", w))
 	}
 	for _, l := range lines[start:end] {
 		rows = append(rows, fit(l.text, w))
+	}
+
+	rows = append(rows, strings.Repeat(" ", w))
+	if m.draftRows() > 0 {
+		rows = append(rows, m.draftLine(w))
 	}
 
 	// An attachment shows in the prompt, the text becomes its caption.
@@ -224,8 +330,29 @@ func (m *model) conversation(w, h int) []string {
 	m.input.SetWidth(max(1, w-2-ansi.StringWidth(m.input.Prompt)))
 	m.input.SetCursor(m.input.Position()) // SetWidth alone keeps the old visible window
 	rows = append(rows, fit(" "+m.input.View(), w))
-	return rows
+	return rows[overflow:]
 }
+
+// draftLine names the message the composer replies to or edits.
+func (m *model) draftLine(w int) string {
+	id, label := m.replyTo, "Reply to "
+	if m.editing != 0 {
+		id, label = m.editing, "Edit"
+	}
+	msg, _ := m.message(id)
+	switch {
+	case m.editing != 0:
+	case msg.Out:
+		label += "You"
+	default:
+		label += msg.From
+	}
+	return fit(" "+m.st.accent.Render("▌"+label)+"  "+m.st.muted.Render(strings.Join(strings.Fields(msg.Preview()), " ")), w)
+}
+
+// groupGap is how far apart two messages of one sender can be and still be
+// drawn together when spaced.
+const groupGap = 5 * time.Minute
 
 // photoIndent is the hanging indent of message bodies: " HH:MM ".
 const photoIndent = 7
@@ -239,7 +366,9 @@ type msgLine struct {
 
 // messageLines lays the history out for a pane of width w: a date line per
 // day, then "HH:MM Name: text" wrapped with a hanging indent, and the photo
-// below when it is loaded.
+// below when it is loaded. Spaced, a gap sets apart a new sender or a pause,
+// and each day; otherwise messages are packed. Gaps and dates belong to no
+// message. The message being replied to or edited is marked.
 func (m *model) messageLines(h *history, w int) []msgLine {
 	const indent = photoIndent
 	pad := strings.Repeat(" ", indent)
@@ -251,12 +380,26 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 		byID[msg.ID] = msg
 
 		if d := msg.Date.Format("Mon 2 Jan 2006"); d != day {
+			if day != "" && m.spaced {
+				lines = append(lines, msgLine{"", -1})
+			}
 			day = d
 			lines = append(lines, msgLine{center(m.st.muted.Render(d), w), -1})
+		} else if prev := h.msgs[i-1]; m.spaced && (prev.Out != msg.Out || prev.FromID != msg.FromID ||
+			prev.Service != msg.Service || msg.Date.Sub(prev.Date) > groupGap) {
+			lines = append(lines, msgLine{"", -1})
+		}
+
+		// The message being replied to or edited is marked in the first
+		// column, which is otherwise blank.
+		mark, padded := " ", pad
+		if msg.ID == m.replyTo || msg.ID == m.editing {
+			mark = m.st.accent.Render("▌")
+			padded = mark + pad[1:]
 		}
 		if ref := byID[msg.ReplyTo]; ref != nil {
 			quote := ansi.Truncate(firstWord(ref.From)+": "+strings.Join(strings.Fields(ref.Preview()), " "), w-indent-3, "…")
-			lines = append(lines, msgLine{pad + m.st.muted.Render("↪ "+quote), i})
+			lines = append(lines, msgLine{padded + m.st.muted.Render("↪ "+quote), i})
 		}
 
 		name := lipgloss.NewStyle().Foreground(m.st.peer(msg.FromID)).Render(msg.From)
@@ -282,15 +425,15 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 		}
 
 		for j, l := range strings.Split(ansi.Wrap(text, max(10, w-indent-1), ""), "\n") {
-			prefix := pad
+			prefix := padded
 			if j == 0 {
-				prefix = " " + m.st.muted.Render(msg.Date.Format("15:04")) + " "
+				prefix = mark + m.st.muted.Render(msg.Date.Format("15:04")) + " "
 			}
 			lines = append(lines, msgLine{prefix + l, i})
 		}
 		if photo.id != 0 {
 			for _, l := range termimg.Placeholder(photo.id, photo.cols, photo.rows) {
-				lines = append(lines, msgLine{pad + l, i})
+				lines = append(lines, msgLine{padded + l, i})
 			}
 		}
 	}
@@ -300,29 +443,62 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 func (m *model) statusLine() string {
 	// Each hint is a key and what it does.
 	hints := [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "compose"}, {"q", "quit"}}
-	switch m.focus {
-	case focusInput:
-		hints = [][2]string{{"enter", "send"}, {"ctrl+v", "paste image"}, {"pgup/pgdn", "scroll"}, {"esc", "chats"}, {"ctrl+c", "quit"}}
+	switch {
+	case m.menu != nil:
+		hints = [][2]string{{"↑↓", "move"}, {"enter", "pick"}, {"esc", "close"}}
+	case m.focus == focusInput && m.editing != 0:
+		hints = [][2]string{{"esc", "cancel"}}
+	case m.focus == focusInput && m.replyTo != 0:
+		hints = [][2]string{{"ctrl+↑↓", "pick"}, {"esc", "cancel"}}
+	case m.focus == focusInput:
+		hints = [][2]string{{"ctrl+↑↓", "reply"}, {"↑", "edit last"}, {"right click", "more"}, {"ctrl+v", "paste image"}, {"esc", "chats"}, {"pgup/pgdn", "scroll"}, {"ctrl+c", "quit"}}
 		if m.attached() {
-			hints[1] = [2]string{"backspace", "remove attachment"}
+			hints[3] = [2]string{"backspace", "remove attachment"}
 		}
-	case focusFilter:
+	case m.focus == focusFilter:
 		hints = [][2]string{{"type", "to filter"}, {"enter", "open"}, {"esc", "clear"}}
 	}
-	// An error takes the whole line: it is usually longer than what is left
-	// next to the hints, and matters more than them.
-	if m.status != "" {
+	// An error or a note takes the whole line: an error is usually longer
+	// than what is left next to the hints, and matters more than them.
+	switch {
+	case m.status != "":
 		return fit(" "+m.st.err.Render(m.status), m.width)
+	case m.note != "":
+		return fit(" "+m.st.accent.Render(m.note), m.width)
 	}
 	right := m.st.muted.Render("tg " + m.version)
 	if m.account != "" {
 		right = m.st.accent.Render(m.account) + "  " + right
 	}
+	// Hints come most useful first, and the ones that do not fit are left
+	// out whole rather than cut.
 	var help strings.Builder
+	room := m.width - ansi.StringWidth(right) - 2
 	for _, h := range hints {
-		help.WriteString(" " + m.st.text.Render(h[0]) + " " + m.st.muted.Render(h[1]) + " ")
+		hint := " " + m.st.key.Render(h[0]) + " " + m.st.dim.Render(h[1]) + " "
+		if room -= ansi.StringWidth(hint); room < 0 {
+			break
+		}
+		help.WriteString(hint)
 	}
 	return spread(help.String(), right+" ", m.width)
+}
+
+// menuWidth is the width of a context menu: its longest label, padded.
+func menuWidth(items []menuItem) int {
+	w := 0
+	for _, item := range items {
+		w = max(w, ansi.StringWidth(item.label))
+	}
+	return w + 3
+}
+
+// overlay draws box over row, a line w cells wide, from cell x on.
+func overlay(row, box string, x, w int) string {
+	left := ansi.Truncate(row, x, "")
+	left += strings.Repeat(" ", max(0, x-ansi.StringWidth(left)))
+	right := ansi.TruncateLeft(row, x+ansi.StringWidth(box), "")
+	return fit(left+ansi.ResetStyle+box+right, w)
 }
 
 // fit truncates or pads s to exactly w cells.

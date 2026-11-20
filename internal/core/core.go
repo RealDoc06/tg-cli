@@ -139,6 +139,10 @@ type Backend interface {
 	Resolve(ctx context.Context, ref string) (Chat, error)
 	History(ctx context.Context, chatID int64, q HistoryQuery) ([]Message, error)
 	Send(ctx context.Context, chatID int64, req SendRequest) (Message, error)
+	// Edit replaces the text, or the caption, of a message. Telegram decides
+	// what may be edited, which in a channel can include other admins'
+	// posts: front ends offer it only for messages the account sent.
+	Edit(ctx context.Context, chatID int64, msgID int, text string) error
 	MarkRead(ctx context.Context, chatID int64, maxID int) error
 	// CreateGroup makes a new group with only the account in it.
 	CreateGroup(ctx context.Context, title string) (Chat, error)

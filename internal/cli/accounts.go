@@ -18,11 +18,38 @@ import (
 	"github.com/RealDoc06/tg-cli/internal/tui"
 )
 
-// interactive reports whether tg is run from a terminal, which is as close
-// as it can get to knowing a person is there. An agent that drives a real
-// terminal passes: the README says so. Tests replace it.
+// interactive reports whether a person runs tg: from a terminal, and not
+// under a coding agent. An agent that drives a terminal it did not start
+// from its own shell, such as one it opens with computer use, still passes:
+// the README says so. Tests replace it.
 var interactive = func() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	return agentEnv() == "" && term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// agentVars are set by coding agents in the environment of the commands they
+// run, including inside a terminal they drive (tmux, a pty).
+var agentVars = []string{
+	"AI_AGENT", "CLAUDECODE", "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED",
+	"CODEX_THREAD_ID", "CURSOR_AGENT", "GEMINI_CLI", "OPENCODE",
+}
+
+// agentEnv returns the first of agentVars that is set, "" when none is.
+func agentEnv() string {
+	for _, name := range agentVars {
+		if os.Getenv(name) != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+// agentNote names the variable that marks tg as run by an agent, for
+// refusals: a person who inherited it from an agent's shell sees why.
+func agentNote() string {
+	if name := agentEnv(); name != "" {
+		return " (" + name + " is set, so an agent runs this)"
+	}
+	return ""
 }
 
 // needPerson refuses to loosen guardrails, to log in or to remove an account
@@ -33,7 +60,7 @@ func needPerson(what string) error {
 	if interactive() {
 		return nil
 	}
-	return &core.RefusedError{Reason: what + " has to be done by a person at a terminal, it is not for agents. If you are one, ask your user"}
+	return &core.RefusedError{Reason: what + " has to be done by a person at a terminal, it is not for agents" + agentNote() + ". If you are one, ask your user"}
 }
 
 // loadPolicy reads the guardrails of an account from config.json.
@@ -194,7 +221,7 @@ func (a *app) printAccounts() error {
 }
 
 func (a *app) configCmd() *command {
-	c := a.newCommand("config [read-only on|off] [allow|disallow <chat>...] [theme <name>]", "Show or change an account's guardrails and the TUI theme", 0, -1)
+	c := a.newCommand("config [read-only on|off] [allow|disallow <chat>...] [theme <name>] [spacing on|off]", "Show or change an account's guardrails and how the TUI looks", 0, -1)
 	c.long = `Show or change what an account is allowed to do. The settings live in
 config.json, which you can also edit by hand: the commands and the file are
 the same thing.
@@ -206,15 +233,20 @@ the same thing.
   tg config allow --any         drop the list, any chat can be written to
   tg config theme               list the TUI themes
   tg config theme <name>        pick the TUI's colors, for every account
+  tg config spacing on|off      set messages apart in the TUI, or pack them
+                                (the default), for every account
 
-Guardrails apply to every write: sending, marking as read, creating groups.
+Guardrails apply to every write: sending, editing, marking as read, creating groups.
 Reading is never limited. Making them looser needs a person at a terminal:
 turning read-only off, adding to a list or dropping it. Tightening does not.`
 	lift := c.flags.Bool("any", false, "with allow: lift the limit, any chat can be written to")
 	c.run = func(ctx context.Context, args []string) error {
-		// The theme belongs to no account.
+		// How the TUI looks belongs to no account.
 		if len(args) > 0 && args[0] == "theme" {
 			return a.theme(args[1:])
+		}
+		if len(args) > 0 && args[0] == "spacing" {
+			return a.spacing(args[1:])
 		}
 		account, cfg, err := a.active()
 		if err != nil {
@@ -271,7 +303,7 @@ turning read-only off, adding to a list or dropping it. Tightening does not.`
 			err = config.Update(func(f *config.File) error { return disallow(f.Ensure(account), ids) })
 
 		default:
-			return errUsage{errors.New("usage: tg config [read-only on|off] [allow|disallow <chat>...] [theme <name>], see `tg config --help`")}
+			return errUsage{errors.New("usage: tg config [read-only on|off] [allow|disallow <chat>...] [theme <name>] [spacing on|off], see `tg config --help`")}
 		}
 		if err != nil {
 			return err
@@ -361,7 +393,7 @@ func (a *app) printConfig(account string) error {
 		return emitJSON(map[string]any{
 			"file": config.FilePath(), "account": account, "user": entry.User,
 			"read_only": entry.ReadOnly, "send_to": append([]config.Chat{}, entry.SendTo...),
-			"theme": themeName(cfg.Theme),
+			"theme": themeName(cfg.Theme), "spaced_messages": cfg.SpacedMessages,
 		})
 	}
 	readOnly := "off"
@@ -372,6 +404,7 @@ func (a *app) printConfig(account string) error {
 	fmt.Printf("account    %s (%s)\n", account, describeUser(entry.User))
 	fmt.Printf("read-only  %s\n", readOnly)
 	fmt.Printf("theme      %s\n", themeName(cfg.Theme))
+	fmt.Printf("spacing    %s\n", onOff(cfg.SpacedMessages))
 	if len(entry.SendTo) == 0 {
 		fmt.Println("sends to   any chat")
 		return nil
@@ -381,6 +414,36 @@ func (a *app) printConfig(account string) error {
 		fmt.Printf("           %d  %s\n", chat.ID, chat.Title)
 	}
 	return nil
+}
+
+// spacing runs `tg config spacing [on|off]`: with a value it sets whether the
+// TUI sets messages apart, then either way prints the setting.
+func (a *app) spacing(args []string) error {
+	switch {
+	case len(args) == 1 && (args[0] == "on" || args[0] == "off"):
+		on := args[0] == "on"
+		if err := config.Update(func(f *config.File) error { f.SpacedMessages = on; return nil }); err != nil {
+			return err
+		}
+	case len(args) != 0:
+		return errUsage{errors.New("usage: tg config spacing [on|off]")}
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if a.json {
+		return emitJSON(map[string]any{"spaced_messages": cfg.SpacedMessages})
+	}
+	fmt.Println("spacing", onOff(cfg.SpacedMessages))
+	return nil
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 // themeName is the theme the TUI draws with: the configured one, or the

@@ -16,6 +16,10 @@ import (
 	"strings"
 
 	"golang.org/x/image/draw"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/fixed"
 )
 
 // Supported reports whether the terminal can show placeholder images. It is
@@ -150,6 +154,42 @@ func Avatar(data []byte, size int) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// Initials draws the badge of a chat without a photo: a size x size square
+// of bg with text centered on it in fg, returning PNG data ready for
+// Transmit. Text centers as an image, which it cannot do in cells: the badge
+// is two rows tall.
+func Initials(text string, bg, fg color.Color, size int) ([]byte, error) {
+	dst := image.NewNRGBA(image.Rect(0, 0, size, size))
+	draw.Draw(dst, dst.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
+
+	face, err := initialsFace(float64(size) * 0.42)
+	if err != nil {
+		return nil, err
+	}
+	defer face.Close()
+	// Center the ink, not the advance: capitals sit above the baseline.
+	ink, _ := font.BoundString(face, text)
+	dot := fixed.P(size/2, size/2).Sub(fixed.Point26_6{
+		X: (ink.Min.X + ink.Max.X) / 2,
+		Y: (ink.Min.Y + ink.Max.Y) / 2,
+	})
+	(&font.Drawer{Dst: dst, Src: image.NewUniform(fg), Face: face, Dot: dot}).DrawString(text)
+
+	var out bytes.Buffer
+	if err := png.Encode(&out, dst); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func initialsFace(px float64) (font.Face, error) {
+	f, err := opentype.Parse(gobold.TTF)
+	if err != nil {
+		return nil, err
+	}
+	return opentype.NewFace(f, &opentype.FaceOptions{Size: px, DPI: 72, Hinting: font.HintingFull})
 }
 
 // Cell proportions assumed when sizing pictures: terminal cells are about

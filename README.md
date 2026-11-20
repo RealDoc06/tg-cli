@@ -72,7 +72,7 @@ An agent with your session can write to anyone as you. Two limits keep that in c
 
 ```sh
 tg config                        # show the limits and where the file is
-tg config read-only on           # no sending, no marking as read, no new groups
+tg config read-only on           # no sending, editing, marking as read or new groups
 tg config allow "Dev Team" @bob  # from now on, write only to these chats
 tg config disallow @bob          # take one off the list (never the last one)
 tg config allow --any            # lift the list
@@ -95,10 +95,10 @@ They live in `config.json`, and the commands and the file are the same thing: ed
 - Only `id` counts in `send_to`, the title is for you. An empty list means any chat.
 - The file is re-read on every write, so a change applies at once, even to a TUI that is already open.
 - A misspelled key stops tg with an error instead of being ignored.
-- Loosening a limit (`read-only off`, adding to a list or dropping it), `login`, `logout` and `accounts use` only work from an interactive terminal. Agents normally run commands without one and are refused, so a message cannot talk them out of their limits with one command. Tightening works from anywhere, including starting a list on an open account.
+- Loosening a limit (`read-only off`, adding to a list or dropping it), `login`, `logout`, `accounts use` and the TUI only work for a person at an interactive terminal. Agents normally run commands without one and are refused, so a message cannot talk them out of their limits with one command. A terminal is not enough when a coding agent's variable is set (`AI_AGENT`, `CLAUDECODE`, `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED`, `CODEX_THREAD_ID`, `CURSOR_AGENT`, `GEMINI_CLI`, `OPENCODE`): agents set them for every command they run, also inside tmux or a pty they drive. Tightening works from anywhere, including starting a list on an open account.
 - Limits belong to an account, not to an agent. `--account` reaches every account on the machine, so restrict each one an agent could use.
 - `tg download` refuses to write into tg's own directory and never replaces an existing file.
-- What this does not stop: reading is never limited, an agent that drives a real terminal (tmux, a pty) passes the terminal check, and one that edits files can edit `config.json`. The guardrails stop mistakes and injected instructions, not a determined process with your user's rights.
+- What this does not stop: reading is never limited, an agent that opens a terminal without its variables (with computer use, or an agent that sets none) passes the check, and one that edits files can edit `config.json`. `tg guide` tells agents never to open the TUI. The guardrails stop mistakes and injected instructions, not a determined process with your user's rights.
 
 ## Accounts
 
@@ -123,11 +123,14 @@ Run `tg` with no arguments.
 | `/` | Filter chats by name |
 | `tab` `esc` | Switch between chat list and composer |
 | `pgup` `pgdn` | Scroll the conversation, older messages load as you go |
+| `ctrl+↑` `ctrl+↓` | Pick the message to reply to (`alt` works too) |
+| `↑` | In an empty composer, edit your last message |
+| `esc` | Cancel the reply or the edit |
 | `ctrl+v` | Attach the image in the clipboard, the message becomes its caption |
 | `backspace` | Remove the attachment, when the message is empty |
 | `q` `ctrl+c` | Quit |
 
-The mouse works too: click a chat, scroll either pane. New messages arrive live.
+The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages the composer cannot hold as they are (several lines, special characters) are edited elsewhere. New messages arrive live.
 
 To send a picture, copy it and paste it into the composer, or press `ctrl+v`, or drop the file on the terminal, which pastes its path. Without an image in the clipboard, both paste text.
 
@@ -139,9 +142,11 @@ To send a picture, copy it and paste it into the composer, or press `ctrl+v`, or
 
 `tg config theme <name>` picks the colors: the Catppuccin flavors `mocha` (the default), `macchiato`, `frappe` and `latte`, or Telegram's `dark` and `light`. `tg config theme` lists them. The theme paints the terminal's background while tg runs, and is stored as `"theme"` in `config.json`.
 
+`tg config spacing on` sets messages apart in the conversation: a blank line before a new sender, a pause of more than five minutes, or a new day. Off, the default, packs them together. It is stored as `"spaced_messages"` in `config.json`.
+
 ### Pictures
 
-Profile pictures and photos in conversations are drawn in terminals that implement the Kitty graphics protocol with Unicode placeholders: [Kitty](https://sw.kovidgoyal.net/kitty/) and [Ghostty](https://ghostty.org). Elsewhere each chat gets a colored badge with its initials, and photos show as `[photo]`. Inside tmux, pictures need `set -g allow-passthrough on`. Force them on or off with `TG_IMAGES=1` or `TG_IMAGES=0`.
+Profile pictures and photos in conversations are drawn in terminals that implement the Kitty graphics protocol with Unicode placeholders: [Kitty](https://sw.kovidgoyal.net/kitty/) and [Ghostty](https://ghostty.org). A chat without a photo gets a square badge with its initials. Elsewhere the badge is drawn with text, and photos show as `[photo]`. Inside tmux, pictures need `set -g allow-passthrough on`. Force them on or off with `TG_IMAGES=1` or `TG_IMAGES=0`.
 
 ## Updates
 

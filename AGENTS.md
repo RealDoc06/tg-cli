@@ -40,6 +40,7 @@ scripts/build-release.sh v0.0.0     # cross compile every platform into dist/
 - Commands that loosen guardrails call `needPerson`. `config.json` stays the single source of truth: commands read it, change it and write it back, never cache it.
 - Reading never marks messages as read unless asked. Sending by title only matches chats in the chat list.
 - No continuously repainting animations in the TUI (spinners, blinking).
+- The TUI is for people. Agents only look at it through `scripts/shot.sh`, which runs on demo data.
 - Tests are focused on behavior that can break. No smoke tests.
 
 ## Pull requests
