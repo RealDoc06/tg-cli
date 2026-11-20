@@ -97,6 +97,9 @@ func TestViewFillsTheTerminal(t *testing.T) {
 			case "help":
 				m.panel = &panel{page: pageHelp}
 			}
+			if state == "panel" && size[1] >= 10 && screenRow(m, "Quit") < 0 {
+				t.Errorf("%v: the menu items do not show", size)
+			}
 			rows := strings.Split(m.View().Content, "\n")
 			if len(rows) != size[1] {
 				t.Errorf("%v %s: %d rows", size, state, len(rows))

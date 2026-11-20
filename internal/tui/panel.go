@@ -177,9 +177,14 @@ func (m *model) panelView() (x, y int, lines []string, first int) {
 	var body []string
 	switch m.panel.page {
 	case pageMain:
+		// The logo, the version and a blank row go when they do not fit,
+		// so the items always show.
 		w = len([]rune(logo[0])) + 6
-		body = m.logoLines(w - 2)
-		body = append(body, "")
+		if m.width >= w && m.bodyRows() >= len(logo)+2+len(mainItems)+4 {
+			body = append(m.logoLines(w-2), "")
+		} else {
+			w, title = 38, "tg-cli"
+		}
 		for i, p := range mainItems {
 			body = append(body, m.item(center(pageNames[p], w-3), "", i == m.panel.sel, w-2))
 		}
