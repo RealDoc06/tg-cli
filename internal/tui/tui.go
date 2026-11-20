@@ -541,7 +541,7 @@ func (m *model) keepView(msgID int, change func()) {
 func imagePath(text string) (string, bool) {
 	text = strings.TrimSpace(text)
 	candidates := []string{text, strings.Trim(text, `'"`), strings.ReplaceAll(text, `\`, "")}
-	if u, err := url.Parse(text); err == nil && u.Scheme == "file" {
+	if u, err := url.Parse(text); err == nil && u.Scheme == "file" && (u.Host == "" || u.Host == "localhost") {
 		candidates = append(candidates, u.Path)
 	}
 	for _, path := range candidates {

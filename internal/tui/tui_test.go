@@ -330,3 +330,34 @@ func TestPhotoLoadKeepsTheView(t *testing.T) {
 		}
 	}
 }
+
+// A send that fails gives the draft back, unless the composer changed since:
+// then the draft would land on top of newer work, or in another chat.
+func TestFailedSendRestoresTheDraft(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	failed := func() sentMsg {
+		m.setAttach(core.SendRequest{}) // the composer is cleared for the send
+		return sentMsg{seq: m.attachSeq, req: core.SendRequest{Text: "look", File: "/a.png"}, err: errors.New("offline")}
+	}
+
+	m.Update(failed())
+	if m.input.Value() != "look" || m.attach.File != "/a.png" {
+		t.Errorf("draft not restored: %q, %+v", m.input.Value(), m.attach)
+	}
+
+	m.input.Reset()
+	msg := failed()
+	m.pasteImage() // ctrl+v while the send was in flight
+	m.Update(msg)
+	if m.input.Value() != "" || m.attached() {
+		t.Error("the draft was restored over a newer paste")
+	}
+
+	msg = failed()
+	open(t, m, 2)
+	m.Update(msg)
+	if m.input.Value() != "" || m.attached() {
+		t.Error("the draft was restored into another chat")
+	}
+}
