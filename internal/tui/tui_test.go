@@ -79,7 +79,7 @@ func upload(m *model, cmd tea.Cmd) {
 func TestViewFillsTheTerminal(t *testing.T) {
 	for _, size := range [][2]int{{120, 30}, {80, 24}, {72, 10}, {50, 20}, {20, 6}} {
 		m := loaded(t, size[0], size[1])
-		for _, state := range []string{"list", "opened", "replying with a menu open", "settings"} {
+		for _, state := range []string{"list", "opened", "replying with a menu open", "panel", "settings", "help"} {
 			switch state {
 			case "opened":
 				open(t, m, 1)
@@ -89,9 +89,16 @@ func TestViewFillsTheTerminal(t *testing.T) {
 				if m.menu == nil && size[1] >= 10 {
 					t.Errorf("%v: no menu opened on the newest message", size)
 				}
-			case "settings":
+			case "panel":
 				m.menu = nil
-				m.settings = &settingsMenu{}
+				m.panel = &panel{}
+			case "settings":
+				m.panel = &panel{page: pageSettings}
+			case "help":
+				m.panel = &panel{page: pageHelp}
+			}
+			if state == "panel" && size[1] >= 10 && screenRow(m, "Quit") < 0 {
+				t.Errorf("%v: the menu items do not show", size)
 			}
 			rows := strings.Split(m.View().Content, "\n")
 			if len(rows) != size[1] {
@@ -1017,11 +1024,12 @@ func TestSettingsShowAndSaveOneChange(t *testing.T) {
 	m.save = func(change func(*Look)) error { saved = append(saved, change); return nil }
 
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.settings == nil || screenRow(m, "Settings") < 0 {
-		t.Fatal("esc on the chat list did not open the settings")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // Settings, first in the menu
+	if m.panel == nil || m.panel.page != pageSettings || screenRow(m, "Message spacing") < 0 {
+		t.Fatal("esc on the chat list, then enter, did not open the settings")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // Theme
-	if m.look.Theme != "macchiato" || m.st.theme.Name != "macchiato" {
+	if m.look.Theme != "latte" || m.st.theme.Name != "latte" {
 		t.Fatalf("theme is %q, drawn with %q", m.look.Theme, m.st.theme.Name)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
@@ -1036,16 +1044,20 @@ func TestSettingsShowAndSaveOneChange(t *testing.T) {
 		t.Fatalf("chats are %d rows apart, %d before chat spacing turned off", packed, stride)
 	}
 
-	file := Look{Theme: "latte", Keys: "mac"} // changed elsewhere meanwhile
+	file := Look{Theme: "mocha", Keys: "mac"} // changed elsewhere meanwhile
 	for _, change := range saved {
 		change(&file)
 	}
-	if want := (Look{Theme: "macchiato", Spaced: true, Keys: "mac", PackedChats: true}); file != want {
+	if want := (Look{Theme: "latte", Spaced: true, Keys: "mac", PackedChats: true}); file != want {
 		t.Fatalf("config.json holds %+v, want %+v", file, want)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.settings != nil {
-		t.Fatal("esc did not close the settings")
+	if m.panel == nil || m.panel.page != pageMain || m.panel.sel != 0 {
+		t.Fatal("esc did not go back from the settings to the menu, on Settings")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.panel != nil {
+		t.Fatal("esc did not close the menu")
 	}
 }
 

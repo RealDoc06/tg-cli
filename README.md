@@ -129,7 +129,7 @@ Run `tg` with no arguments.
 | `ctrl+v` (`cmd+v` on a Mac) | Attach the image in the clipboard, the message becomes its caption |
 | `backspace` | Remove the attachment, when the message is empty |
 | `ctrl+c` | Clear the composer or cancel the edit, quit when it is empty |
-| `esc` | In the chat list, open the settings: theme, spacing of messages and chats, how shortcuts are written |
+| `esc` | In the chat list, open the menu: settings (theme, spacing of messages and chats, how shortcuts are written), help and quit |
 | `q` | Quit, from the chat list |
 
 The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages the composer cannot hold as they are (several lines, special characters) are edited elsewhere. New messages arrive live. What you type and leave unsent stays with its chat, shown in the list as a `[draft]`.
@@ -142,11 +142,11 @@ To send a picture, copy it and paste it into the composer, or press `ctrl+v`, or
 
 ### Themes
 
-`tg config theme <name>` picks the colors: the Catppuccin flavors `mocha` (the default), `macchiato`, `frappe` and `latte`, or Telegram's `dark` and `light`. `tg config theme` lists them. The theme paints the terminal's background while tg runs, and is stored as `"theme"` in `config.json`.
+`tg config theme <name>` picks the colors: the Catppuccin flavors `mocha`, `macchiato`, `frappe` (the default) and `latte`, or Telegram's `dark` and `light`. `tg config theme` lists them. The theme paints the terminal's background while tg runs, and is stored as `"theme"` in `config.json`.
 
 `tg config spacing on` sets messages apart in the conversation: a blank line before a new sender, a pause of more than five minutes, or a new day. Off, the default, packs them together. It is stored as `"spaced_messages"` in `config.json`.
 
-Both can also be changed in the settings, with `esc` from the chat list. There "Shortcuts" picks how keys are written: `⌘V` and `⌥↑↓` on a Mac, `ctrl+v` and `ctrl+↑↓` elsewhere. It follows the system tg runs on, so over SSH from a Mac set it once. It is stored as `"keys"` in `config.json`.
+Both can also be changed in the settings, in the menu `esc` opens from the chat list. There "Shortcuts" picks how keys are written: `⌘V` and `⌥↑↓` on a Mac, `ctrl+v` and `ctrl+↑↓` elsewhere. It follows the system tg runs on, so over SSH from a Mac set it once. It is stored as `"keys"` in `config.json`.
 
 Bots' inline buttons are drawn under their messages. Click one to press it, the bot's answer shows at the bottom. A link button copies its link. Buttons that need Telegram's own apps, like games and payments, say so.
 
