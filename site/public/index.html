@@ -477,25 +477,30 @@ selectSystem(detectSystem());
 const copyButton = document.getElementById('copy');
 const copyStatus = document.getElementById('copy-status'); // says the outcome to screen readers
 let copyTimer;
+let copyAttempt = 0; // the clipboard answers later: only the latest click on the command still shown may report
 function resetCopy() {
+  copyAttempt++;
   clearTimeout(copyTimer);
   copyButton.classList.remove('done');
   copyStatus.textContent = '';
 }
 copyButton.addEventListener('click', async () => {
   const command = document.getElementById('install-cmd');
-  const text = command.textContent;
-  copyStatus.textContent = '';
+  resetCopy();
+  const attempt = copyAttempt;
+  let copied = true;
   try {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(command.textContent);
   } catch {
+    copied = false;
+  }
+  if (attempt !== copyAttempt) return; // a newer click or another system took over
+  if (!copied) {
     // No clipboard access (plain http, old webview): select it so one more gesture copies.
     getSelection().selectAllChildren(command);
     copyStatus.textContent = 'Command selected. Copy it with your keyboard.';
     return;
   }
-  if (command.textContent !== text) return; // the other system was picked meanwhile
-  clearTimeout(copyTimer);
   copyButton.classList.add('done');
   copyStatus.textContent = 'Copied';
   copyTimer = setTimeout(resetCopy, 1600);
