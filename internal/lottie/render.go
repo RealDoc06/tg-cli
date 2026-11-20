@@ -1,6 +1,7 @@
 package lottie
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"image/draw"
@@ -10,12 +11,23 @@ import (
 	"strings"
 )
 
+// ErrTooComplex is returned for a frame that takes more work to draw than
+// any real sticker does, such as precomps that use each other over and over.
+var ErrTooComplex = errors.New("lottie: animation is too complex to draw")
+
+// workBudget bounds the work of one frame, counted in polygon points and
+// layers. The stickers of Telegram's own apps stay under 40 000.
+const workBudget = 1_000_000
+
 // Render draws the animation at a frame, scaled to w x h pixels.
-func (a *Animation) Render(frame float64, w, h int) *image.RGBA {
+func (a *Animation) Render(frame float64, w, h int) (*image.RGBA, error) {
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	r := renderer{anim: a, raster: newRaster(), canvas: dst.Rect}
+	r := renderer{anim: a, raster: newRaster(dst.Rect), canvas: dst.Rect}
 	r.layers(dst, a.Layers, frame, scale(float64(w)/a.Width, float64(h)/a.Height), 0)
-	return dst
+	if r.raster.work > workBudget {
+		return nil, ErrTooComplex
+	}
+	return dst, nil
 }
 
 type renderer struct {
@@ -23,6 +35,7 @@ type renderer struct {
 	raster *raster
 	canvas image.Rectangle
 	spare  []*image.RGBA // cleared layer buffers to reuse
+	inside []string      // the precomps being drawn, to skip cycles
 }
 
 // maxDepth bounds precomps nested in precomps, and parent chains, which a
@@ -86,6 +99,9 @@ func (r *renderer) layers(dst *image.RGBA, ls []layer, frame float64, base affin
 // layer draws one layer onto dst. A layer with masks or partly transparent
 // is drawn on its own first, as a whole.
 func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, byIndex map[int]*layer, depth int) {
+	if r.raster.work += layerWork; r.raster.work > workBudget {
+		return
+	}
 	local := frame - l.Start
 	m := base.mul(world(l, frame, byIndex, 0))
 	opacity := l.Ks.Opacity.scalar(local, 100) / 100
@@ -115,7 +131,12 @@ func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, 
 		if stretch == 0 {
 			stretch = 1
 		}
+		if slices.Contains(r.inside, l.RefID) {
+			return
+		}
+		r.inside = append(r.inside, l.RefID)
 		r.layers(out, r.anim.precomps[l.RefID], local/stretch, m, depth+1)
+		r.inside = r.inside[:len(r.inside)-1]
 	default:
 		return
 	}
@@ -160,17 +181,18 @@ func (t *transform) matrix(frame float64) affine {
 // applyMasks keeps the parts of a layer its masks select. Mask paths are in
 // layer space.
 func (r *renderer) applyMasks(buf *image.RGBA, masks []mask, frame float64, m affine) {
+	masks = slices.DeleteFunc(slices.Clone(masks), func(mk mask) bool { return mk.Mode == "n" })
+	if len(masks) == 0 {
+		return // masks that do nothing leave the layer whole
+	}
 	b := buf.Rect
 	cover := make([]float64, b.Dx()*b.Dy())
-	if masks[0].Mode == "s" {
+	if masks[0].Mode == "s" || masks[0].Mode == "i" {
 		for i := range cover {
-			cover[i] = 1 // subtracting starts from everything
+			cover[i] = 1 // subtracting and intersecting start from everything
 		}
 	}
 	for _, mk := range masks {
-		if mk.Mode == "n" {
-			continue
-		}
 		r.raster.polygon(flatten(mk.Path.at(frame), m).pts...)
 		alpha := r.raster.coverage(b)
 		o := mk.Opacity.scalar(frame, 100) / 100
@@ -379,9 +401,6 @@ func (b *builder) draw(r *raster, dst *image.RGBA) {
 			c := it.C.at(b.frame, 0, 0, 0)
 			if len(c) < 3 {
 				continue
-			}
-			if len(c) > 3 {
-				opacity *= c[3]
 			}
 			src = solidOf(rgba(c[0], c[1], c[2], opacity))
 		default:

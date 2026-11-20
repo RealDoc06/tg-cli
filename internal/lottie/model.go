@@ -1,8 +1,11 @@
 // Package lottie renders Lottie animations, the format of Telegram's animated
-// stickers (a TGS file is gzipped Lottie JSON). It covers what Telegram allows
-// in stickers: shape, solid, null and precomp layers, parenting, masks, track
-// mattes, and shapes with fills, strokes, gradients and trim paths. Effects,
-// expressions, images, text and 3D are ignored.
+// stickers (a TGS file is gzipped Lottie JSON). It draws shape, solid, null
+// and precomp layers, parenting, masks, track mattes, and shapes with fills,
+// strokes, gradients and trim paths. It skips what Telegram forbids in
+// stickers (effects, expressions, images, text, 3D, stars, repeaters, time
+// remapping) and some of what it allows: even-odd fills draw as nonzero,
+// merge paths and dashes are ignored, and precomps are not clipped. Files
+// come from strangers, so rendering is bounded, see ErrTooComplex.
 package lottie
 
 import (

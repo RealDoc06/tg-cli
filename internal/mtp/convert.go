@@ -71,19 +71,26 @@ func (b *backend) author(from, chat tg.PeerClass, out bool, e tg.Entities) (int6
 }
 
 // mediaSummary names the attachment of a message in a few words and tells
-// how it can be drawn.
+// how it can be drawn. Media behind a spoiler is not drawn.
 func mediaSummary(media tg.MessageMediaClass) (string, core.PictureKind) {
 	switch m := media.(type) {
 	case nil, *tg.MessageMediaEmpty, *tg.MessageMediaWebPage:
 		return "", core.NoPicture
 	case *tg.MessageMediaPhoto:
+		if m.Spoiler {
+			return core.MediaPhoto, core.NoPicture
+		}
 		return core.MediaPhoto, core.PicturePhoto
 	case *tg.MessageMediaDocument:
 		doc, ok := m.Document.(*tg.Document)
 		if !ok {
 			return "file", core.NoPicture
 		}
-		return documentSummary(doc)
+		summary, kind := documentSummary(doc)
+		if m.Spoiler {
+			kind = core.NoPicture
+		}
+		return summary, kind
 	case *tg.MessageMediaGeo, *tg.MessageMediaGeoLive, *tg.MessageMediaVenue:
 		return "location", core.NoPicture
 	case *tg.MessageMediaContact:

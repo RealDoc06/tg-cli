@@ -100,18 +100,39 @@ type raster struct {
 	polys  [][]vec
 	bounds [4]float64 // min x, min y, max x, max y
 	cov    []uint8
+	// view is the canvas with a margin: polygons are clipped to it, so a
+	// point far off canvas costs nothing to rasterize.
+	view [4]float64
+	// work counts points and layers drawn, see workBudget. Past it, nothing
+	// more is drawn.
+	work int
 }
 
-func newRaster() *raster { return &raster{z: vector.NewRasterizer(1, 1)} }
+// layerWork is what a layer counts for in the work budget: it may take a
+// buffer of its own.
+const layerWork = 256
+
+func newRaster(canvas image.Rectangle) *raster {
+	return &raster{
+		z:    vector.NewRasterizer(1, 1),
+		view: [4]float64{float64(canvas.Min.X) - 2, float64(canvas.Min.Y) - 2, float64(canvas.Max.X) + 2, float64(canvas.Max.Y) + 2},
+	}
+}
 
 func (r *raster) polygon(pts ...vec) {
 	if len(pts) < 3 {
+		return
+	}
+	if r.work += len(pts); r.work > workBudget {
 		return
 	}
 	for _, p := range pts {
 		if math.IsNaN(p[0]) || math.IsNaN(p[1]) || math.IsInf(p[0], 0) || math.IsInf(p[1], 0) {
 			return
 		}
+	}
+	if pts = clip(pts, r.view); len(pts) < 3 {
+		return
 	}
 	if len(r.polys) == 0 {
 		r.bounds = [4]float64{math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)}
@@ -120,6 +141,51 @@ func (r *raster) polygon(pts ...vec) {
 		r.bounds = [4]float64{min(r.bounds[0], p[0]), min(r.bounds[1], p[1]), max(r.bounds[2], p[0]), max(r.bounds[3], p[1])}
 	}
 	r.polys = append(r.polys, pts)
+}
+
+// clip cuts a polygon to a rectangle (min x, min y, max x, max y), one edge
+// at a time (Sutherland Hodgman). The coverage inside stays the same.
+func clip(pts []vec, box [4]float64) []vec {
+	for edge := range 4 {
+		inside := func(p vec) bool {
+			switch edge {
+			case 0:
+				return p[0] >= box[0]
+			case 1:
+				return p[1] >= box[1]
+			case 2:
+				return p[0] <= box[2]
+			}
+			return p[1] <= box[3]
+		}
+		cross := func(a, b vec) vec {
+			var t float64
+			switch edge {
+			case 0, 2:
+				t = (box[edge] - a[0]) / (b[0] - a[0])
+			default:
+				t = (box[edge] - a[1]) / (b[1] - a[1])
+			}
+			return vec{a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t}
+		}
+		in := pts
+		pts = make([]vec, 0, len(in)+4)
+		for i, b := range in {
+			a := in[(i+len(in)-1)%len(in)]
+			switch {
+			case inside(b) && !inside(a):
+				pts = append(pts, cross(a, b), b)
+			case inside(b):
+				pts = append(pts, b)
+			case inside(a):
+				pts = append(pts, cross(a, b))
+			}
+		}
+		if len(pts) == 0 {
+			return nil
+		}
+	}
+	return pts
 }
 
 // coverage rasterizes the polygons collected so far and forgets them. It
@@ -348,6 +414,8 @@ func dedupe(pts []vec) []vec {
 // pieces of each path in order.
 func trimPaths(paths []polyline, start, end, offset float64) [][]polyline {
 	out := make([][]polyline, len(paths))
+	// Eased keyframes can overshoot, which must not wrap to the other end.
+	start, end = math.Max(0, math.Min(1, start)), math.Max(0, math.Min(1, end))
 	if start > end {
 		start, end = end, start
 	}
@@ -451,7 +519,7 @@ func newGradient(it *shape, m affine, frame, opacity float64) *gradient {
 		g.start, g.end = vec{s[0], s[1]}, vec{e[0], e[1]}
 	}
 	values := it.Gradient.Colors.at(frame)
-	n := min(it.Gradient.Count*4, len(values))
+	n := max(0, min(it.Gradient.Count*4, len(values)))
 	g.colors, g.alphas = values[:n-n%4], values[n:]
 	return g
 }

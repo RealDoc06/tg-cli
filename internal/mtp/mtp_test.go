@@ -147,4 +147,13 @@ func TestMediaSummary(t *testing.T) {
 			t.Errorf("mediaSummary(%T) = %q, want %q", media, got, want)
 		}
 	}
+	// A spoiler is not drawn: that would give it away.
+	for _, media := range []tg.MessageMediaClass{
+		&tg.MessageMediaPhoto{Spoiler: true},
+		&tg.MessageMediaDocument{Spoiler: true, Document: &tg.Document{Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeVideo{Duration: 3}}}},
+	} {
+		if _, kind := mediaSummary(media); kind != core.NoPicture {
+			t.Errorf("spoiler %T is drawn", media)
+		}
+	}
 }

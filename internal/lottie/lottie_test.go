@@ -16,7 +16,11 @@ func render(t *testing.T, layers ...string) *image.RGBA {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a.Render(0, 100, 100)
+	img, err := a.Render(0, 100, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
 }
 
 // shapes is a shape layer with one group, props are extra layer keys. rc
@@ -140,6 +144,48 @@ func TestMattesAndMasks(t *testing.T) {
 	img = render(t, shapes(mask, full, red))
 	expect(t, img, 20, 50, transparent)
 	expect(t, img, 80, 50, opaque(255, 0, 0))
+
+	// A mask set to none does nothing at all.
+	img = render(t, shapes(strings.Replace(mask, `"mode":"s"`, `"mode":"n"`, 1), full, red))
+	expect(t, img, 20, 50, opaque(255, 0, 0))
+}
+
+// Stickers come from strangers: a file built to crash or stall the renderer
+// must fail fast, or draw what it can.
+func TestHostileFilesAreBounded(t *testing.T) {
+	parse := func(data string) *Animation {
+		a, err := Parse([]byte(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	precomp := func(ref string) string {
+		return `{"ty":0,"refId":"` + ref + `","ip":0,"op":60,"ks":{}}`
+	}
+
+	// Each precomp draws the next four times: 4^15 layers.
+	var assets []string
+	for i := range 15 {
+		next := fmt.Sprintf("a%d", i+1)
+		assets = append(assets, fmt.Sprintf(`{"id":"a%d","layers":[%s,%s,%s,%s]}`, i, precomp(next), precomp(next), precomp(next), precomp(next)))
+	}
+	assets = append(assets, `{"id":"a15","layers":[`+shapes("", rc(50, 50, 10, 10), red)+`]}`)
+	fanOut := parse(`{"fr":60,"ip":0,"op":60,"w":100,"h":100,"layers":[` + precomp("a0") + `],"assets":[` + strings.Join(assets, ",") + `]}`)
+	if _, err := fanOut.Render(0, 100, 100); err != ErrTooComplex {
+		t.Errorf("fan out: %v", err)
+	}
+
+	cases := map[string]string{
+		"a precomp drawing itself": `{"fr":60,"ip":0,"op":60,"w":100,"h":100,"layers":[` + precomp("a") + `],"assets":[{"id":"a","layers":[` + precomp("a") + `,` + shapes("", rc(50, 50, 10, 10), red) + `]}]}`,
+		"negative gradient stops":  `{"fr":60,"ip":0,"op":60,"w":100,"h":100,"layers":[` + shapes("", rc(50, 50, 10, 10), `{"ty":"gf","t":1,"s":{"k":[0,0]},"e":{"k":[10,0]},"o":{"k":100},"g":{"p":-1,"k":{"k":[0,1,0,0,1,0,0,1]}}}`) + `]}`,
+		"a shape far off canvas":   `{"fr":60,"ip":0,"op":60,"w":100,"h":100,"layers":[` + shapes("", rc(50, 50, 1e9, 1e9), red) + `]}`,
+	}
+	for name, data := range cases {
+		if _, err := parse(data).Render(0, 100, 100); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
 }
 
 // A child layer moves with its parent, a null layer that draws nothing.

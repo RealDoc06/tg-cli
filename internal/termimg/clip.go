@@ -26,6 +26,9 @@ const (
 	clipPixels  = 4_000_000
 )
 
+// clipTimeout bounds the decoding of one clip.
+const clipTimeout = 30 * time.Second
+
 // decoders bounds how many clips are decoded at once.
 var decoders = make(chan struct{}, 2)
 
@@ -61,7 +64,7 @@ func Frames(ctx context.Context, clip []byte, cols, rows int) (frames [][]byte, 
 	}
 	var images []image.Image
 	if bytes.HasPrefix(clip, gzipM) {
-		images, err = renderLottie(clip, w, h)
+		images, err = renderLottie(ctx, clip, w, h)
 	} else {
 		images, err = decode(ctx, clip, w, h)
 	}
@@ -84,14 +87,23 @@ func Frames(ctx context.Context, clip []byte, cols, rows int) (frames [][]byte, 
 // maxFrames is how many w x h frames fit in the budget of a clip.
 func maxFrames(w, h int) int { return max(1, clipPixels/(w*h)) }
 
-// renderLottie renders the frames of a TGS sticker.
-func renderLottie(tgs []byte, w, h int) ([]image.Image, error) {
+// renderLottie renders the frames of a TGS sticker. The file comes from
+// anyone in the chat, so a panic of the renderer is an error like any other,
+// and rendering stops at the deadline ffmpeg gets too.
+func renderLottie(ctx context.Context, tgs []byte, w, h int) (images []image.Image, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			images, err = nil, fmt.Errorf("animated sticker: %v", r)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(ctx, clipTimeout)
+	defer cancel()
 	zr, err := gzip.NewReader(bytes.NewReader(tgs))
 	if err != nil {
 		return nil, err
 	}
 	// Telegram caps stickers at 64 KB gzipped, this is far more than enough.
-	data, err := io.ReadAll(io.LimitReader(zr, 16<<20))
+	data, err := io.ReadAll(io.LimitReader(zr, 4<<20))
 	if err != nil {
 		return nil, err
 	}
@@ -101,9 +113,14 @@ func renderLottie(tgs []byte, w, h int) ([]image.Image, error) {
 	}
 	step := anim.FrameRate / clipFPS
 	n := min(maxFrames(w, h), max(1, int((anim.Out-anim.In)/step)))
-	images := make([]image.Image, n)
+	images = make([]image.Image, n)
 	for i := range n {
-		images[i] = anim.Render(anim.In+float64(i)*step, w, h)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if images[i], err = anim.Render(anim.In+float64(i)*step, w, h); err != nil {
+			return nil, err
+		}
 	}
 	return images, nil
 }
@@ -124,25 +141,31 @@ func decode(ctx context.Context, clip []byte, w, h int) ([]image.Image, error) {
 		return nil, err
 	}
 
-	// Video stickers carry transparency only libvpx decodes, in software.
-	// Anything else may use a hardware decoder, ffmpeg falls back on its own.
-	args := []string{"-v", "error", "-nostdin", "-hwaccel", "auto"}
+	// The file comes from anyone in the chat: ffmpeg reads it as the one
+	// format it claims to be, never as a playlist that would fetch other
+	// files or URLs, and refuses frames past 4K. Video stickers carry
+	// transparency only libvpx decodes, in software. MP4 may use a hardware
+	// decoder, ffmpeg falls back on its own.
+	args := []string{"-v", "error", "-nostdin", "-protocol_whitelist", "file", "-max_pixels", "8294400"}
 	if bytes.HasPrefix(clip, webm) {
-		args = []string{"-v", "error", "-nostdin", "-c:v", "libvpx-vp9"}
+		args = append(args, "-f", "matroska", "-c:v", "libvpx-vp9")
+	} else {
+		args = append(args, "-f", "mov", "-hwaccel", "auto")
 	}
-	args = append(args, "-i", file.Name(), "-an",
+	args = append(args, "-i", file.Name(), "-an", "-map", "0:v:0",
 		"-vf", fmt.Sprintf("fps=%d,scale=%d:%d", clipFPS, w, h),
 		"-frames:v", fmt.Sprint(maxFrames(w, h)),
 		"-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1")
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, clipTimeout)
 	defer cancel()
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("ffmpeg: %w: %s", err, strings.TrimSpace(stderr.String()))
+		msg, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n")
+		return nil, fmt.Errorf("ffmpeg: %w: %s", err, msg)
 	}
 	var images []image.Image
 	for size := w * h * 4; len(raw) >= size; raw = raw[size:] {
@@ -150,4 +173,17 @@ func decode(ctx context.Context, clip []byte, w, h int) ([]image.Image, error) {
 		images = append(images, &image.NRGBA{Pix: raw[:size], Stride: w * 4, Rect: image.Rect(0, 0, w, h)})
 	}
 	return images, nil
+}
+
+// Footprint is about how many bytes the terminal keeps for PNG frames: it
+// stores them decoded.
+func Footprint(frames [][]byte) int {
+	if len(frames) == 0 {
+		return 0
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(frames[0]))
+	if err != nil {
+		return 0
+	}
+	return cfg.Width * cfg.Height * 4 * len(frames)
 }

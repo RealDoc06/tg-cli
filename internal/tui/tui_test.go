@@ -781,3 +781,43 @@ func TestEditWaitsForTheClipboard(t *testing.T) {
 		t.Errorf("edit started during a clipboard read: editing %d, status %q", m.editing, m.status)
 	}
 }
+
+// Animations take megabytes in the terminal, which drops pictures on its own
+// past its quota. The TUI frees the oldest first, so it knows they are gone
+// and loads them again when they come back into view.
+func TestOldestPicturesAreFreedPastTheBudget(t *testing.T) {
+	m := loaded(t, 120, 30)
+	big := imageBudget / 3
+	for i := 1; i <= 4; i++ {
+		m.update(uploadedMsg{imageKey{1, i}, shown{id: i, cols: 4, rows: 2, bytes: big}})
+	}
+	if _, kept := m.images[imageKey{1, 1}]; kept {
+		t.Error("the oldest picture is still counted on")
+	}
+	for i := 2; i <= 4; i++ {
+		if _, kept := m.images[imageKey{1, i}]; !kept {
+			t.Errorf("picture %d was freed too", i)
+		}
+	}
+	if m.imageBytes != 3*big {
+		t.Errorf("%d bytes counted, want %d", m.imageBytes, 3*big)
+	}
+}
+
+// Leaving a chat stops loading its pictures, and they load again on return.
+func TestLeavingAChatStopsItsPictures(t *testing.T) {
+	m := loaded(t, 120, 30)
+	m.graphics = true
+	open(t, m, 1)
+	left := m.view
+	open(t, m, 0)
+	if left.Err() == nil {
+		t.Fatal("the pictures of the chat left still load")
+	}
+	key := imageKey{1, 1}
+	m.images[key] = shown{}
+	m.update(imageMsg{key: key, retry: true})
+	if _, seen := m.images[key]; seen {
+		t.Error("a stopped picture would never load again")
+	}
+}

@@ -351,8 +351,12 @@ var heart = sync.OnceValues(func() (core.Picture, error) {
 	if err != nil {
 		return core.Picture{}, err
 	}
+	frame, err := anim.Render(anim.In, 128, 128)
+	if err != nil {
+		return core.Picture{}, err
+	}
 	var still bytes.Buffer
-	err = png.Encode(&still, anim.Render(anim.In, 128, 128))
+	err = png.Encode(&still, frame)
 	return core.Picture{Still: still.Bytes(), Clip: tgs.Bytes()}, err
 })
 
