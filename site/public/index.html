@@ -552,12 +552,14 @@ copyButton.addEventListener('click', async () => {
   }
   if (attempt !== copyAttempt) return; // a newer click or another system took over
   if (!copied) {
-    // No clipboard access (plain http, old webview).
+    // No clipboard access (plain http, old webview). Selected again: a slow rejection may come after a click elsewhere.
+    getSelection().selectAllChildren(command);
     copyStatus.textContent = 'Command selected. Copy it with your keyboard.';
     return;
   }
   copyButton.classList.add('done');
-  copyStatus.textContent = 'Copied. The command is also selected, in case the copy was blocked.'; // a blocked write resolves too
+  // A blocked write resolves too, so lead with what the page knows for sure.
+  copyStatus.textContent = 'Command selected and copied. If it does not paste, copy it with your keyboard.';
   copyTimer = setTimeout(resetCopy, 1600);
 });
 
