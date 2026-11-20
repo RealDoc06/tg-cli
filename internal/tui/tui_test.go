@@ -396,3 +396,20 @@ func TestClickOpensTheChatUnderIt(t *testing.T) {
 		t.Errorf("a click in a list too short for any chat opened chat %d", tiny.openID)
 	}
 }
+
+// Messages are packed unless spacing is on, which sets them apart.
+func TestSpacingSetsMessagesApart(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	blanks := func() int {
+		lines, _ := m.messageLines(m.histories[m.openID], 80)
+		return len(slices.DeleteFunc(lines, func(l string) bool { return l != "" }))
+	}
+	if n := blanks(); n != 0 {
+		t.Errorf("packed by default, got %d blank lines", n)
+	}
+	m.spaced = true
+	if blanks() == 0 {
+		t.Error("spacing on left no gap between messages")
+	}
+}

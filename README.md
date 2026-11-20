@@ -134,6 +134,8 @@ The mouse works too: click a chat, scroll either pane, right click a message to 
 
 `tg config theme <name>` picks the colors: the Catppuccin flavors `mocha` (the default), `macchiato`, `frappe` and `latte`, or Telegram's `dark` and `light`. `tg config theme` lists them. The theme paints the terminal's background while tg runs, and is stored as `"theme"` in `config.json`.
 
+`tg config spacing on` sets messages apart in the conversation: a blank line before a new sender, a pause of more than five minutes, or a new day. Off, the default, packs them together. It is stored as `"spaced_messages"` in `config.json`.
+
 ### Profile pictures
 
 Real profile pictures are drawn in terminals that implement the Kitty graphics protocol with Unicode placeholders: [Kitty](https://sw.kovidgoyal.net/kitty/) and [Ghostty](https://ghostty.org). Elsewhere each chat gets a colored badge with its initials. Inside tmux, pictures need `set -g allow-passthrough on`. Force them on or off with `TG_IMAGES=1` or `TG_IMAGES=0`.

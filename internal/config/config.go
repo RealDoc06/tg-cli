@@ -80,8 +80,11 @@ type File struct {
 	// Account is the one commands use when none is named.
 	Account string `json:"account,omitempty"`
 	// Theme names the TUI's colors, see `tg config theme`. Empty is the default.
-	Theme    string              `json:"theme,omitempty"`
-	Accounts map[string]*Account `json:"accounts,omitempty"`
+	Theme string `json:"theme,omitempty"`
+	// SpacedMessages sets messages apart in the TUI's conversation, see
+	// `tg config spacing`. Off packs them together.
+	SpacedMessages bool                `json:"spaced_messages,omitempty"`
+	Accounts       map[string]*Account `json:"accounts,omitempty"`
 }
 
 // Account is one logged in Telegram account and its guardrails. Both

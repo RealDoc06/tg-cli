@@ -200,7 +200,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 			if len(cfg.Accounts) > 1 {
 				label = name
 			}
-			return tui.Run(ctx, be, a.version, label, cfg.Theme)
+			return tui.Run(ctx, be, a.version, label, tui.Look{Theme: cfg.Theme, Spaced: cfg.SpacedMessages})
 		})
 	}
 

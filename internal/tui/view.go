@@ -332,13 +332,13 @@ func (m *model) draftLine(w int) string {
 }
 
 // groupGap is how far apart two messages of one sender can be and still be
-// drawn together.
+// drawn together when spaced.
 const groupGap = 5 * time.Minute
 
 // messageLines lays the history out for a pane of width w: a date line per
-// day, then "HH:MM Name: text" wrapped with a hanging indent. Messages from
-// one sender close in time stay together, a gap sets the others apart.
-// ids holds the message ID of each line, 0 for
+// day, then "HH:MM Name: text" wrapped with a hanging indent. Spaced, a gap
+// sets apart a new sender or a pause, and each day; otherwise messages are
+// packed. ids holds the message ID of each line, 0 for
 // dates and gaps. The message being replied to or edited is marked.
 func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 	const indent = 7 // " HH:MM "
@@ -352,13 +352,13 @@ func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 		byID[msg.ID] = msg
 
 		if d := msg.Date.Format("Mon 2 Jan 2006"); d != day {
-			if day != "" {
+			if day != "" && m.spaced {
 				add(0, "")
 			}
 			day = d
 			add(0, center(m.st.muted.Render(d), w))
-		} else if prev := h.msgs[i-1]; prev.Out != msg.Out || prev.FromID != msg.FromID ||
-			prev.Service != msg.Service || msg.Date.Sub(prev.Date) > groupGap {
+		} else if prev := h.msgs[i-1]; m.spaced && (prev.Out != msg.Out || prev.FromID != msg.FromID ||
+			prev.Service != msg.Service || msg.Date.Sub(prev.Date) > groupGap) {
 			add(0, "")
 		}
 

@@ -54,6 +54,7 @@ type model struct {
 	account string // shown in the status line when not empty
 	images  bool
 	st      styles
+	spaced  bool // gaps between messages, see Look
 
 	width, height int
 	focus         focus
@@ -134,14 +135,20 @@ type (
 	eventMsg core.Event
 )
 
+// Look is how the TUI is drawn, as config.json sets it.
+type Look struct {
+	Theme  string // one of Themes, "" for the default
+	Spaced bool   // a gap between messages of different senders or moments
+}
+
 // Run starts the TUI and blocks until the user quits. account, when not
-// empty, is shown so it is clear whose chats these are. theme names one of
-// Themes, "" for the default.
-func Run(ctx context.Context, be core.Backend, version, account, theme string) error {
+// empty, is shown so it is clear whose chats these are.
+func Run(ctx context.Context, be core.Backend, version, account string, look Look) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	m := newModel(ctx, be, theme)
+	m := newModel(ctx, be, look.Theme)
+	m.spaced = look.Spaced
 	m.version, m.account, m.images = version, account, termimg.Supported()
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	go func() {

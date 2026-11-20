@@ -283,6 +283,19 @@ func TestTheme(t *testing.T) {
 	}
 }
 
+// Spacing takes on or off and nothing else, and lands in config.json.
+func TestSpacing(t *testing.T) {
+	if err := run(t, "config", "spacing", "on"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t, "config", "spacing", "yes"); !errors.As(err, new(errUsage)) {
+		t.Errorf("spacing yes: %v", err)
+	}
+	if cfg, _ := config.Load(); !cfg.SpacedMessages {
+		t.Error("spacing on did not reach config.json")
+	}
+}
+
 func TestAccounts(t *testing.T) {
 	atTerminal(t, true)
 	for _, login := range [][]string{{"login"}, {"login", "--account", "work"}} {
