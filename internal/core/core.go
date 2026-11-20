@@ -35,6 +35,9 @@ type Chat struct {
 	Last     *Message `json:"last,omitempty"`
 	// PhotoID identifies the current profile photo, 0 when there is none.
 	PhotoID int64 `json:"-"`
+	// ReadOutbox is the newest message sent by the account that the other
+	// side has read, by anyone in a group. Older ones are read too.
+	ReadOutbox int `json:"-"`
 }
 
 // Message is one message of a chat. Media and service messages carry a short
@@ -175,6 +178,9 @@ const (
 	// EventReady is sent once, when the subscription is live: every message
 	// from then on is reported. It carries no chat or message.
 	EventReady EventKind = "ready"
+	// EventRead tells that the other side read the account's messages up to
+	// Chat.ReadOutbox. Only the chat's ID is set, and no message.
+	EventRead EventKind = "read"
 )
 
 // Event is a live update. Chat describes the chat the message belongs to, so

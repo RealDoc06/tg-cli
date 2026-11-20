@@ -430,10 +430,14 @@ type key struct {
 // day, then "HH:MM Name: text" wrapped with a hanging indent, and the picture
 // below when it is loaded. Spaced, a gap sets apart a new sender or a pause,
 // and each day; otherwise messages are packed. Gaps and dates belong to no
-// message. The message being replied to or edited is marked.
+// message. The message being replied to or edited is marked. Messages of the
+// account end with a check, colored once read, except where nobody reads
+// them: channels and Saved Messages.
 func (m *model) messageLines(h *history, w int) []msgLine {
 	const indent = photoIndent
 	pad := strings.Repeat(" ", indent)
+	chat := m.chat(m.openID)
+	receipts := chat != nil && chat.Kind != core.KindChannel && chat.ID != m.be.Self().ID
 	byID := make(map[int]*core.Message, len(h.msgs))
 	var lines []msgLine
 	var day string
@@ -492,10 +496,28 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 			text += m.st.muted.Render(" (edited)")
 		}
 
-		for j, l := range strings.Split(ansi.Wrap(text, max(10, w-indent-1), ""), "\n") {
+		// The check sits at the right edge of the last line. The text of
+		// the message wraps narrower to keep room for it.
+		var check string
+		if receipts && msg.Out && !msg.Service {
+			check = m.st.muted.Render("✓") + " "
+			if msg.ID <= chat.ReadOutbox {
+				check = m.st.accent.Render("✓") + " "
+			}
+		}
+		wrap := w - indent - 1
+		if check != "" {
+			wrap -= 3 // " ✓ "
+		}
+		wrapped := strings.Split(ansi.Wrap(text, max(10, wrap), ""), "\n")
+		for j, l := range wrapped {
 			prefix := padded
 			if j == 0 {
 				prefix = mark + m.st.muted.Render(msg.Date.Format("15:04")) + " "
+			}
+			if j == len(wrapped)-1 && check != "" {
+				l = spread(prefix+l, check, w)
+				prefix = ""
 			}
 			lines = append(lines, msgLine{text: prefix + l, msg: i})
 		}

@@ -153,6 +153,13 @@ func New() *Backend {
 		msgs := b.messages[chat.ID]
 		msgs[len(msgs)-1].Buttons = keyboards[chat.ID]
 		chat.Last = &msgs[len(msgs)-1]
+		// They read everything up to their last answer, so a message of
+		// the account after it shows as not read yet.
+		for _, m := range msgs {
+			if !m.Out {
+				chat.ReadOutbox = m.ID
+			}
+		}
 		b.chats = append(b.chats, chat)
 	}
 	// Pinned chats first, then most recent first, like the real chat list.
@@ -246,11 +253,16 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 		time.AfterFunc(time.Second, func() {
 			b.mu.Lock()
 			b.messages[chatID] = append(b.messages[chatID], reply)
+			chat, _ := b.chat(chatID)                    // b.chats may have moved since
+			chat.ReadOutbox = max(chat.ReadOutbox, m.ID) // read before answering
+			read := core.Event{Kind: core.EventRead, Chat: core.Chat{ID: chatID, ReadOutbox: chat.ReadOutbox}}
 			ev := core.Event{Kind: core.EventMessage, Chat: *chat, Message: reply}
 			b.mu.Unlock()
-			select {
-			case b.events <- ev:
-			default:
+			for _, ev := range []core.Event{read, ev} {
+				select {
+				case b.events <- ev:
+				default:
+				}
 			}
 		})
 	}
