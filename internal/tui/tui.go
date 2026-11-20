@@ -15,6 +15,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	textclip "github.com/atotto/clipboard"
 
 	"github.com/RealDoc06/tg-cli/internal/clipboard"
 	"github.com/RealDoc06/tg-cli/internal/core"
@@ -73,8 +74,11 @@ type model struct {
 	input  textinput.Model
 	filter textinput.Model
 	// attach is the picture or file pasted into the composer, sent with the
-	// next message. Its Text is unused.
+	// next message. Its Text is unused. Change it with setAttach.
 	attach core.SendRequest
+	// attachSeq counts changes to attach. A clipboard read started before
+	// the latest one is stale: the user moved on.
+	attachSeq int
 
 	// images holds the pictures uploaded to the terminal. An entry with ID
 	// 0 is loading, or failed and shows as text.
@@ -124,12 +128,13 @@ type (
 		key imageKey
 		img shown
 	}
-	// clipboardMsg carries an image read from the system clipboard for the
-	// composer of chatID.
+	// clipboardMsg carries what the system clipboard held: an image, or
+	// text when it had none. seq is attachSeq when the read started.
 	clipboardMsg struct {
-		chatID int64
-		png    []byte
-		err    error
+		seq  int
+		png  []byte
+		text string
+		err  error
 	}
 	errMsg   struct{ err error }
 	eventMsg core.Event
@@ -279,7 +284,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			// else was written since.
 			if msg.chatID == m.openID && m.input.Value() == "" && !m.attached() {
 				m.input.SetValue(msg.req.Text)
-				m.attach, m.attach.Text = msg.req, ""
+				msg.req.Text = ""
+				m.setAttach(msg.req)
 			}
 			return nil
 		}
@@ -323,15 +329,16 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 
 	case clipboardMsg:
 		switch {
-		case msg.chatID != m.openID:
-			return nil // the image was meant for another chat
-		case msg.err == nil:
-			m.attach = core.SendRequest{Photo: msg.png}
-			return nil
+		case msg.seq != m.attachSeq:
+			return nil // the chat or the attachment changed since
+		case msg.png != nil:
+			m.setAttach(core.SendRequest{Photo: msg.png})
+		case msg.text != "":
+			return m.paste(msg.text) // no image, ctrl+v pastes text as before
 		case !errors.Is(msg.err, clipboard.ErrNoImage):
 			m.status = msg.err.Error()
 		}
-		return textinput.Paste // no image, ctrl+v pastes text as before
+		return nil
 
 	case tea.PasteMsg:
 		if m.focus == focusInput {
@@ -432,10 +439,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 			m.scroll -= m.messageRows() / 2
 			return m.afterScroll()
 		case "ctrl+v":
-			return m.pasteImage(m.openID)
+			return m.pasteImage()
 		case "backspace":
 			if m.input.Value() == "" && m.attached() {
-				m.attach = core.SendRequest{}
+				m.setAttach(core.SendRequest{})
 				return nil
 			}
 		case "enter":
@@ -445,7 +452,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			m.input.Reset()
-			m.attach = core.SendRequest{}
+			m.setAttach(core.SendRequest{})
 			chatID := m.openID
 			return func() tea.Msg {
 				sent, err := m.be.Send(m.ctx, chatID, req)
@@ -465,10 +472,10 @@ func (m *model) attached() bool { return m.attach.File != "" || m.attach.Photo !
 // is what some terminals send when the clipboard holds only an image.
 func (m *model) paste(text string) tea.Cmd {
 	if strings.TrimSpace(text) == "" {
-		return m.pasteImage(m.openID)
+		return m.pasteImage()
 	}
 	if path, ok := imagePath(text); ok {
-		m.attach = core.SendRequest{File: path}
+		m.setAttach(core.SendRequest{File: path})
 		return nil
 	}
 	var cmd tea.Cmd
@@ -476,12 +483,22 @@ func (m *model) paste(text string) tea.Cmd {
 	return cmd
 }
 
-// pasteImage reads an image from the system clipboard into the composer of
-// chatID, for terminals that only paste text.
-func (m *model) pasteImage(chatID int64) tea.Cmd {
+func (m *model) setAttach(req core.SendRequest) {
+	m.attach = req
+	m.attachSeq++
+}
+
+// pasteImage reads the system clipboard for terminals that only paste text:
+// its image, or else its text.
+func (m *model) pasteImage() tea.Cmd {
+	seq := m.attachSeq
 	return func() tea.Msg {
 		data, err := clipboard.Image(m.ctx)
-		return clipboardMsg{chatID, data, err}
+		if err != nil {
+			text, _ := textclip.ReadAll()
+			return clipboardMsg{seq: seq, text: text, err: err}
+		}
+		return clipboardMsg{seq: seq, png: data}
 	}
 }
 
@@ -670,7 +687,7 @@ func (m *model) openSelected() tea.Cmd {
 	chatID := chats[m.sel].ID
 	m.openID, m.scroll = chatID, 0
 	m.input.Reset()
-	m.attach = core.SendRequest{} // it was meant for the previous chat
+	m.setAttach(core.SendRequest{}) // it was meant for the previous chat
 	cmds := []tea.Cmd{m.setFocus(focusInput)}
 	if h := m.histories[chatID]; h == nil {
 		m.histories[chatID] = &history{loading: true}

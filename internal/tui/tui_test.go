@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -246,44 +247,54 @@ func TestLongAttachmentNameFits(t *testing.T) {
 	}
 }
 
-// Reading the clipboard takes a moment. An image that arrives after the user
-// switched chats must not be attached to the chat now open.
-func TestClipboardImageStaysWithItsChat(t *testing.T) {
+// Reading the clipboard takes a moment. A result that arrives after the user
+// switched chats or attached something else must be dropped.
+func TestStaleClipboardReadIsDropped(t *testing.T) {
 	m := loaded(t, 120, 30)
 	open(t, m, 1)
-	first := m.openID
 	read := m.key(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
 	open(t, m, 2)
-	if got := read().(clipboardMsg).chatID; got != first {
-		t.Fatalf("the read is for chat %d, ctrl+v was pressed in %d", got, first)
+	m.Update(read())
+	if m.attached() || m.input.Value() != "" {
+		t.Errorf("a read from another chat landed: %+v, %q", m.attach, m.input.Value())
 	}
-	m.Update(clipboardMsg{chatID: first, png: []byte("png")})
-	if m.attached() {
-		t.Error("an image read for another chat was attached")
-	}
-	m.Update(clipboardMsg{chatID: m.openID, png: []byte("png")})
-	if !m.attached() {
-		t.Error("the image was not attached")
+
+	seq := m.attachSeq // ctrl+v pressed, then a file dropped before the read returns
+	m.setAttach(core.SendRequest{File: "/dropped.png"})
+	m.Update(clipboardMsg{seq: seq, png: []byte("old")})
+	if m.attach.File != "/dropped.png" {
+		t.Error("an older clipboard read replaced the dropped file")
 	}
 }
 
-// Reading older messages, a photo that loads must not move the text in view.
+// Reading older messages, a photo that loads must not move the text in view,
+// whether it is in view or scrolled above it by the time it arrives.
 func TestPhotoLoadKeepsTheView(t *testing.T) {
-	m := loaded(t, 120, 16)
-	m.graphics = true
-	open(t, m, 1)
-	m.images = map[imageKey]shown{}
-	m.scroll = 4 // the photo and the lines around it are in view
-	top := func() string {
-		rows := strings.Split(ansi.Strip(m.View().Content), "\n")
-		return rows[1] // below the chat title
-	}
-	before := top()
-	upload(m, m.loadPhotos())
-	if len(m.images) == 0 {
-		t.Fatal("no photo was loaded")
-	}
-	if after := top(); after != before {
-		t.Errorf("top line went from %q to %q", before, after)
+	for _, above := range []bool{false, true} {
+		m := loaded(t, 120, 8)
+		m.graphics = true
+		open(t, m, 1)
+		m.images = map[imageKey]shown{}
+		h, rows := m.histories[m.openID], m.messageRows()
+		_, rw := m.layout()
+		lines := m.messageLines(h, rw)
+		photo := slices.IndexFunc(lines, func(l msgLine) bool { return l.msg >= 0 && h.msgs[l.msg].Media == core.MediaPhoto })
+		m.scroll = len(lines) - rows - (photo - 1) // the photo is the second line in view
+		load := m.loadPhotos()
+		if above {
+			m.scroll = len(lines) - rows - (photo + 1) // the photo is just above the view
+		}
+		if m.scroll <= 0 {
+			t.Fatalf("scroll %d, the demo chat is too short for this test", m.scroll)
+		}
+		top := func() string { return ansi.Strip(strings.Split(m.View().Content, "\n")[1]) }
+		before := top()
+		upload(m, load)
+		if len(m.images) == 0 {
+			t.Fatal("no photo was loaded")
+		}
+		if after := top(); after != before {
+			t.Errorf("above=%v: top line went from %q to %q", above, before, after)
+		}
 	}
 }
