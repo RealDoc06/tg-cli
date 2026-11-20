@@ -70,10 +70,10 @@ type model struct {
 	// The composer replies to replyTo, or saves an edit of editing instead
 	// of sending. At most one is set, 0 means none.
 	replyTo, editing int
-	editFrom         string // the text the edit started from
-	savingIn         int64  // the chat an edit is being saved in, 0 for none
-	stash            *stash // the composer as it was before an edit, nil for none
-	menu             *menu  // the open context menu, nil when there is none
+	editFrom         string        // the text the edit started from
+	saving           map[int64]int // edits being saved, per chat
+	stash            *stash        // the composer as it was before an edit, nil for none
+	menu             *menu         // the open context menu, nil when there is none
 
 	// avatars maps chat ID to an uploaded image ID, 0 while it is loading.
 	avatars   map[int64]int
@@ -168,7 +168,7 @@ func Run(ctx context.Context, be core.Backend, version, account, theme string) e
 // is not a theme falls back to the default and says so.
 func newModel(ctx context.Context, be core.Backend, theme string) *model {
 	t, ok := FindTheme(theme)
-	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, avatars: map[int64]int{}}
+	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, avatars: map[int64]int{}, saving: map[int64]int{}}
 	if !ok {
 		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", theme, strings.Join(ThemeNames(), ", "))
 	}
@@ -294,8 +294,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case editedMsg:
-		if msg.chatID == m.savingIn {
-			m.savingIn = 0
+		if m.saving[msg.chatID]--; m.saving[msg.chatID] <= 0 {
+			delete(m.saving, msg.chatID)
 		}
 		if m.status == savingNote {
 			m.status = ""
@@ -492,7 +492,7 @@ const savingNote = "saving the edit, a moment"
 // submit sends what is in the composer, as a reply when one is picked, or
 // saves it as the new text of the message being edited.
 func (m *model) submit() tea.Cmd {
-	if m.savingIn != 0 && m.savingIn == m.openID {
+	if m.saving[m.openID] > 0 {
 		// Wait, so a second enter does not send the draft put back.
 		m.status = savingNote
 		return nil
@@ -508,7 +508,7 @@ func (m *model) submit() tea.Cmd {
 			m.cancelDraft()
 			return nil
 		}
-		m.savingIn = chatID
+		m.saving[chatID]++
 		m.cancelDraft()
 		return func() tea.Msg {
 			return editedMsg{chatID, editing, text, m.be.Edit(m.ctx, chatID, editing, text)}
@@ -540,7 +540,7 @@ func (m *model) edit(msg core.Message) tea.Cmd {
 	case multiline(msg.Text):
 		m.status = "the composer holds one line, edit this message in another Telegram app"
 		return nil
-	case m.savingIn != 0 && m.savingIn == m.openID:
+	case m.saving[m.openID] > 0:
 		m.status = savingNote
 		return nil
 	case m.editing == msg.ID:

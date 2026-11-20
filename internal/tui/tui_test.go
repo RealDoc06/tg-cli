@@ -280,3 +280,41 @@ func TestEditGivesTheDraftBack(t *testing.T) {
 		draftBack("after cancelling the failed edit")
 	}
 }
+
+// A save makes enter wait in its own chat only, until every save there is
+// done, however saves in other chats overlap with it.
+func TestSaveBlocksOnlyItsChat(t *testing.T) {
+	m := loaded(t, 120, 30)
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	saveIn := func(i int) tea.Cmd {
+		t.Helper()
+		open(t, m, i)
+		own, ok := m.lastOwn()
+		if !ok {
+			t.Fatalf("chat %d has no message of its own", i)
+		}
+		m.edit(own)
+		m.input.SetValue("edited")
+		_, cmd := m.Update(enter)
+		return cmd
+	}
+	saveA := saveIn(1)
+	saveIn(2) // still saving when A's result arrives
+
+	open(t, m, 1)
+	m.input.SetValue("hi")
+	if _, cmd := m.Update(enter); cmd != nil {
+		t.Fatal("enter sent while this chat's edit is saved")
+	}
+	open(t, m, 3)
+	m.input.SetValue("hi")
+	if _, cmd := m.Update(enter); cmd == nil {
+		t.Error("enter waited in a chat with nothing being saved")
+	}
+	m.Update(saveA())
+	open(t, m, 1)
+	m.input.SetValue("hi")
+	if _, cmd := m.Update(enter); cmd == nil {
+		t.Error("enter still waits after the save is done")
+	}
+}

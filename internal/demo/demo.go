@@ -214,9 +214,10 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 		time.AfterFunc(time.Second, func() {
 			b.mu.Lock()
 			b.messages[chatID] = append(b.messages[chatID], reply)
+			ev := core.Event{Kind: core.EventMessage, Chat: *chat, Message: reply}
 			b.mu.Unlock()
 			select {
-			case b.events <- core.Event{Kind: core.EventMessage, Chat: *chat, Message: reply}:
+			case b.events <- ev:
 			default:
 			}
 		})
