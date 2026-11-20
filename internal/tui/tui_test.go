@@ -54,6 +54,9 @@ func TestViewFillsTheTerminal(t *testing.T) {
 			case "replying with a menu open":
 				m.pickReply(-1)
 				m.openMenu(m.width-1, m.height-5) // the newest message
+				if m.menu == nil && size[1] >= 10 {
+					t.Errorf("%v: no menu opened on the newest message", size)
+				}
 			}
 			rows := strings.Split(m.View().Content, "\n")
 			if len(rows) != size[1] {
@@ -230,5 +233,36 @@ func TestEditKeepsLinesAndDraft(t *testing.T) {
 	}
 	if m.input.Value() != "half typed" {
 		t.Errorf("the draft became %q", m.input.Value())
+	}
+}
+
+// While an edit is saved the composer stays empty, so a second enter sends
+// nothing. A failed edit comes back to the composer, and cancelling it gives
+// back the draft with the reply it was for.
+func TestFailedEditComesBack(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	msgs := m.histories[m.openID].msgs
+	m.pickReply(-1)
+	m.input.SetValue("half typed")
+	own, _ := m.lastOwn()
+	m.edit(own)
+	m.input.SetValue("new text")
+
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	_, save := m.Update(enter)
+	if _, cmd := m.Update(enter); cmd != nil {
+		t.Fatal("a second enter while the edit is saved sent something")
+	}
+	result := save().(editedMsg)
+	result.err = errors.New("MESSAGE_EDIT_TIME_EXPIRED")
+	m.Update(result)
+	if m.editing != own.ID || m.input.Value() != "new text" {
+		t.Fatalf("after the failure: editing %d, composer %q", m.editing, m.input.Value())
+	}
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if want := msgs[len(msgs)-1].ID; m.input.Value() != "half typed" || m.replyTo != want {
+		t.Errorf("draft %q replying to %d, want %q replying to %d", m.input.Value(), m.replyTo, "half typed", want)
 	}
 }

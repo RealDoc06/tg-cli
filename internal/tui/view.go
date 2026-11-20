@@ -385,7 +385,7 @@ func (m *model) statusLine() string {
 	case m.focus == focusInput && m.replyTo != 0:
 		hints = [][2]string{{"ctrl+↑↓", "pick"}, {"esc", "cancel"}}
 	case m.focus == focusInput:
-		hints = [][2]string{{"ctrl+↑↓", "reply"}, {"↑", "edit last"}, {"right click", "more"}, {"esc", "chats"}, {"pgup/pgdn", "scroll"}}
+		hints = [][2]string{{"ctrl+↑↓", "reply"}, {"↑", "edit last"}, {"right click", "more"}, {"esc", "chats"}, {"pgup/pgdn", "scroll"}, {"ctrl+c", "quit"}}
 	case m.focus == focusFilter:
 		hints = [][2]string{{"type", "to filter"}, {"enter", "open"}, {"esc", "clear"}}
 	}

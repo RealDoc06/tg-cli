@@ -70,7 +70,8 @@ type model struct {
 	// The composer replies to replyTo, or saves an edit of editing instead
 	// of sending. At most one is set, 0 means none.
 	replyTo, editing int
-	draft            string // what the composer held before an edit, put back after it
+	editFrom         string // the text the edit started from
+	stash            *stash // the composer as it was before an edit, nil for none
 	menu             *menu  // the open context menu, nil when there is none
 
 	// avatars maps chat ID to an uploaded image ID, 0 while it is loading.
@@ -79,6 +80,13 @@ type model struct {
 
 	status string // an error, shown instead of the hints
 	note   string // a confirmation, like "copied", shown the same way
+}
+
+// stash is what the composer held before an edit: its text and the reply it
+// was for. It comes back when the edit is cancelled or saved.
+type stash struct {
+	text    string
+	replyTo int
 }
 
 // menu is the context menu of one message, opened with a right click.
@@ -289,12 +297,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "edit failed: " + msg.err.Error()
 			// Put the edit back so it is not lost, unless the composer has
 			// moved on to something else.
-			if msg.chatID == m.openID && m.replyTo == 0 && m.editing == 0 {
-				m.draft, m.editing = m.input.Value(), msg.id
+			if original, ok := m.message(msg.id); ok && m.idle() {
+				m.editing, m.editFrom = msg.id, original.Text
 				m.input.SetValue(msg.text)
+				m.input.CursorEnd()
 			}
 			return m, nil
 		}
+		if m.idle() {
+			m.unstash()
+		}
+		m.stash = nil
 		if h := m.histories[msg.chatID]; h != nil {
 			if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.id }); i >= 0 {
 				h.msgs[i].Text, h.msgs[i].Edited = msg.text, true
@@ -465,6 +478,12 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 }
 
+// idle reports whether the composer is empty and neither replies nor edits:
+// the state a saved edit leaves it in until its result arrives.
+func (m *model) idle() bool {
+	return m.input.Value() == "" && m.replyTo == 0 && m.editing == 0
+}
+
 // submit sends what is in the composer, as a reply when one is picked, or
 // saves it as the new text of the message being edited.
 func (m *model) submit() tea.Cmd {
@@ -475,10 +494,14 @@ func (m *model) submit() tea.Cmd {
 			m.status = "a message cannot be empty, esc cancels the edit"
 			return nil
 		}
-		m.cancelDraft()
-		if msg, ok := m.message(editing); ok && strings.TrimSpace(msg.Text) == text {
+		if text == strings.TrimSpace(m.editFrom) {
+			m.cancelDraft()
 			return nil
 		}
+		// The composer stays empty while the edit is saved, so a second
+		// enter cannot send what was put aside. It comes back afterwards.
+		m.editing = 0
+		m.input.Reset()
 		return func() tea.Msg {
 			return editedMsg{chatID, editing, text, m.be.Edit(m.ctx, chatID, editing, text)}
 		}
@@ -510,10 +533,10 @@ func (m *model) edit(msg core.Message) tea.Cmd {
 		m.status = "the composer holds one line, edit this message in another Telegram app"
 		return nil
 	}
-	if m.editing == 0 {
-		m.draft = m.input.Value()
+	if m.editing == 0 && m.stash == nil {
+		m.stash = &stash{m.input.Value(), m.replyTo}
 	}
-	m.replyTo, m.editing = 0, msg.ID
+	m.replyTo, m.editing, m.editFrom = 0, msg.ID, msg.Text
 	m.input.SetValue(msg.Text)
 	m.input.CursorEnd()
 	m.revealMessage(msg.ID)
@@ -523,11 +546,23 @@ func (m *model) edit(msg core.Message) tea.Cmd {
 // cancelDraft drops the reply or the edit. A reply keeps what was typed, an
 // edit gives the composer back what it held before.
 func (m *model) cancelDraft() {
-	if m.editing != 0 {
-		m.input.SetValue(m.draft)
-		m.input.CursorEnd()
+	if m.editing == 0 {
+		m.replyTo = 0
+		return
 	}
-	m.replyTo, m.editing, m.draft = 0, 0, ""
+	m.editing = 0
+	m.unstash()
+}
+
+// unstash puts back what the composer held before an edit.
+func (m *model) unstash() {
+	m.input.Reset()
+	if m.stash != nil {
+		m.input.SetValue(m.stash.text)
+		m.input.CursorEnd()
+		m.replyTo = m.stash.replyTo
+	}
+	m.stash = nil
 }
 
 // pickReply moves the reply to the message before (-1) or after (1) the one
@@ -547,7 +582,7 @@ func (m *model) pickReply(delta int) tea.Cmd {
 	switch {
 	case i >= len(msgs):
 		m.replyTo = 0
-		return nil
+		return m.afterScroll()
 	case i < 0:
 		return nil // the oldest loaded message, page up loads more
 	}
@@ -587,7 +622,7 @@ func (m *model) openMenu(x, y int) {
 	if !msg.Service {
 		items = append(items, menuItem{"Reply", (*model).reply})
 	}
-	if editable(msg) {
+	if editable(msg) && !strings.ContainsAny(msg.Text, "\n\t") {
 		items = append(items, menuItem{"Edit", (*model).edit})
 	}
 	if msg.Text != "" {
@@ -721,7 +756,7 @@ func (m *model) openSelected() tea.Cmd {
 	}
 	chatID := chats[m.sel].ID
 	m.openID, m.scroll = chatID, 0
-	m.replyTo, m.editing, m.draft = 0, 0, ""
+	m.replyTo, m.editing, m.stash = 0, 0, nil
 	m.input.Reset()
 	cmds := []tea.Cmd{m.setFocus(focusInput)}
 	if h := m.histories[chatID]; h == nil {
