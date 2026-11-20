@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Takes a PNG screenshot of tg running in a real terminal (kitty, headless
 # under Xvfb), so pull requests show what a change looks like, images included.
-# An output ending in .gif records 3 seconds instead, for animations.
+# An output ending in .gif records 3 seconds instead, for animations. One ending
+# in .mp4 records the whole interaction, from just before the first key until
+# the last one settles, for showing how something is used.
 # Always runs against the demo data (TG_DEMO=1) so no real chat can leak.
 #
-# Usage: scripts/shot.sh <out.png> [--size WxH] [--key K]... [--text T]... [--action A]... -- <command> [';;' <command>]...
+# Usage: scripts/shot.sh <out.png> [--size WxH] [--font PT] [--key K]... [--text T]... [--action A]... -- <command> [';;' <command>]...
 #
 #   scripts/shot.sh docs/chats.png -- tg chats
 #   scripts/shot.sh docs/tui.png --key down --key enter --text "hello" -- tg
 #   scripts/shot.sh docs/two.png -- tg chats -u ';;' tg read alice -n 3
+#   scripts/shot.sh docs/open.mp4 --size 860x1100 --font 24 --key down --key enter -- tg
 #
 # Commands separated by ';;' run one after the other, each under its own prompt.
 # --key, --text and --action are replayed in order once the command is up.
@@ -21,10 +24,12 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: shot.sh <out.png> [--size WxH] [--key K] [--text T] -- <command>}
 shift
 size=1180x660
+font=12
 steps=()
 while [ $# -gt 0 ]; do
   case $1 in
     --size) size=$2; shift 2 ;;
+    --font) font=$2; shift 2 ;;
     --key) steps+=("key:$2"); shift 2 ;;
     --text) steps+=("text:$2"); shift 2 ;;
     --action) steps+=("action:$2"); shift 2 ;;
@@ -80,12 +85,21 @@ Xvfb "$display" -screen 0 "${size}x24" >/dev/null 2>&1 &
 sleep 1
 export DISPLAY=$display LIBGL_ALWAYS_SOFTWARE=1
 "$kitty" --config NONE \
-  -o font_size=12 -o background=#000000 -o foreground=#ffffff -o cursor_blink_interval=0 \
+  -o font_size="$font" -o background=#000000 -o foreground=#ffffff -o cursor_blink_interval=0 \
   -o remember_window_size=no -o initial_window_width="${size%x*}" -o initial_window_height="${size#*x}" \
   -o window_padding_width=6 -o enable_audio_bell=no -o allow_remote_control=yes \
   --listen-on "unix:$work/kitty.sock" bash "$work/run.sh" >/dev/null 2>&1 &
 
 sleep 3
+mkdir -p "$(dirname "$out")"
+# A video records losslessly while the steps play, and is encoded afterwards
+# so the encoder never drops frames.
+if [[ $out == *.mp4 ]]; then
+  ffmpeg -loglevel error -y -f x11grab -framerate 30 -video_size "$size" -i "$display" \
+    -c:v libx264rgb -qp 0 -preset ultrafast "$work/raw.mkv" &
+  recorder=$!
+  sleep 1.2
+fi
 for step in "${steps[@]}"; do
   case $step in
     key:*) "$kitty" @ --to "unix:$work/kitty.sock" send-key "${step#key:}" ;;
@@ -96,8 +110,10 @@ for step in "${steps[@]}"; do
 done
 sleep 1.5
 
-mkdir -p "$(dirname "$out")"
 case $out in
+  *.mp4) kill -INT "$recorder"; wait "$recorder" || true
+    ffmpeg -loglevel error -y -i "$work/raw.mkv" -c:v libx264 -preset veryslow -tune animation -crf 24 \
+      -pix_fmt yuv420p -movflags +faststart -an "$out" ;;
   *.gif) ffmpeg -loglevel error -y -f x11grab -framerate 15 -video_size "$size" -t 3 -i "$display" \
     -vf "split[a][b];[a]palettegen[p];[b][p]paletteuse" "$out" ;;
   *) ffmpeg -loglevel error -y -f x11grab -video_size "$size" -i "$display" -frames:v 1 "$out" ;;
