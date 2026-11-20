@@ -381,9 +381,10 @@ func TestEnterWaitsForTheClipboard(t *testing.T) {
 		t.Error("enter does not send once the read is cancelled")
 	}
 
-	seq := func() int { m.pasteImage(); return m.attachSeq }()
-	m.Update(clipboardMsg{seq: seq, png: []byte("b")})
-	if m.readingClipboard() || string(m.attach.Photo) != "b" {
-		t.Error("the read did not finish")
+	m.pasteImage()
+	m.key(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.Update(clipboardMsg{seq: m.attachSeq, png: []byte("b")})
+	if m.readingClipboard() || string(m.attach.Photo) != "b" || m.status != "" {
+		t.Errorf("the read did not finish cleanly, status %q", m.status)
 	}
 }

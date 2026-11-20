@@ -340,13 +340,16 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			return nil // the chat or the attachment changed since
 		}
 		m.pasting = 0
+		if m.status == waitClipboard {
+			m.status = ""
+		}
 		switch {
 		case msg.png != nil:
 			m.setAttach(core.SendRequest{Photo: msg.png})
 		case msg.text != "":
 			return m.pasteText(msg.text) // no image, ctrl+v pastes text as before
-		case !errors.Is(msg.err, clipboard.ErrNoImage):
-			m.status = msg.err.Error()
+		default:
+			m.status = msg.err.Error() // nothing pasted, any attachment stays as it was
 		}
 		return nil
 
@@ -466,7 +469,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 			}
 		case "enter":
 			if m.readingClipboard() {
-				m.status = "reading the clipboard, esc cancels"
+				m.status = waitClipboard
 				return nil
 			}
 			req := m.attach
@@ -502,6 +505,9 @@ func (m *model) pasteText(text string) tea.Cmd {
 	m.input, cmd = m.input.Update(tea.PasteMsg{Content: text})
 	return cmd
 }
+
+// waitClipboard is the status shown when enter waits for a clipboard read.
+const waitClipboard = "reading the clipboard, esc cancels"
 
 func (m *model) readingClipboard() bool { return m.pasting != 0 && m.pasting == m.attachSeq }
 
