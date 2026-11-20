@@ -128,6 +128,14 @@ func TestOpenChatDedupesAndStaysRead(t *testing.T) {
 	if !slices.IsSortedFunc(msgs, func(a, b core.Message) int { return cmp.Compare(a.ID, b.ID) }) {
 		t.Error("the history is not in message order")
 	}
+	// One older than the loaded page waits for the older pages, which load
+	// from the oldest message shown and would skip what lies between.
+	oldest := msgs[0].ID
+	m.histories[chat.ID].done = false // the server has older pages
+	m.Update(eventMsg(core.Event{Kind: core.EventMessage, Chat: chat, Message: core.Message{ID: oldest - 1, ChatID: chat.ID, Text: "older"}}))
+	if m.histories[chat.ID].msgs[0].ID != oldest {
+		t.Error("a message older than the loaded page was added to it")
+	}
 	if unread := m.chat(chat.ID).Unread; unread != 0 {
 		t.Errorf("open chat has %d unread", unread)
 	}

@@ -844,9 +844,11 @@ func (m *model) addMessage(msg core.Message, chat *core.Chat, edit bool) {
 	if h := m.histories[msg.ChatID]; h != nil && h.loaded {
 		if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.ID }); i >= 0 {
 			h.msgs[i] = msg
-		} else if !edit {
+		} else if !edit && (h.done || len(h.msgs) == 0 || msg.ID > h.msgs[0].ID) {
 			// By ID, which is the order Telegram gave them, whatever order
-			// they arrive in.
+			// they arrive in. One older than the whole loaded page is left
+			// to the older pages while there are any: added first, it would
+			// make them skip what lies between.
 			at, _ := slices.BinarySearchFunc(h.msgs, msg.ID, func(o core.Message, id int) int { return cmp.Compare(o.ID, id) })
 			h.msgs = slices.Insert(h.msgs, at, msg)
 			if msg.ChatID == m.openID && m.scroll > 0 {
