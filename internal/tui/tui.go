@@ -548,8 +548,8 @@ func (m *model) reply(msg core.Message) tea.Cmd {
 
 func (m *model) edit(msg core.Message) tea.Cmd {
 	switch {
-	case multiline(msg.Text):
-		m.status = "the composer holds one line, edit this message in another Telegram app"
+	case !fitsComposer(msg.Text):
+		m.status = "the composer would change this message (it holds one line of plain text), edit it in another Telegram app"
 		return nil
 	case m.saving[m.openID] > 0:
 		m.status = savingNote
@@ -646,7 +646,7 @@ func (m *model) openMenu(x, y int) {
 	if !msg.Service {
 		items = append(items, menuItem{"Reply", (*model).reply})
 	}
-	if editable(msg) && !multiline(msg.Text) {
+	if editable(msg) && fitsComposer(msg.Text) {
 		items = append(items, menuItem{"Edit", (*model).edit})
 	}
 	if msg.Text != "" {
@@ -671,9 +671,14 @@ func (m *model) openMenu(x, y int) {
 // and it has text. Media without a caption, like a sticker, has none.
 func editable(msg core.Message) bool { return msg.Out && !msg.Service && msg.Text != "" }
 
-// multiline reports whether text holds characters the one line composer
-// turns into spaces: loading it for an edit would change it.
-func multiline(text string) bool { return strings.ContainsAny(text, "\n\r\t") }
+// fitsComposer reports whether the composer holds text unchanged. It is one
+// line and drops what it cannot show (line breaks, tabs, U+FFFD), so editing
+// such a message would rewrite it even when nothing was typed.
+func fitsComposer(text string) bool {
+	in := textinput.New()
+	in.SetValue(text)
+	return in.Value() == text
+}
 
 // runMenu runs the selected item on the message as it is now: it may have
 // been edited since the menu opened.

@@ -227,13 +227,15 @@ func TestEditKeepsLinesAndDraft(t *testing.T) {
 	m := loaded(t, 120, 30)
 	open(t, m, 1)
 	h := m.histories[m.openID]
-	h.msgs = append(h.msgs, core.Message{ID: 9999, ChatID: m.openID, Out: true, Date: time.Now(), Text: "line one\nline two"})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.editing != 0 || m.status == "" {
-		t.Fatalf("a message on two lines was opened for editing: editing %d, status %q", m.editing, m.status)
+	for _, text := range []string{"line one\nline two", "decode failed: \uFFFD"} {
+		h.msgs = append(h.msgs, core.Message{ID: 9999, ChatID: m.openID, Out: true, Date: time.Now(), Text: text})
+		m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+		if m.editing != 0 || m.status == "" {
+			t.Fatalf("%q, which the composer would change, was opened for editing", text)
+		}
+		h.msgs = h.msgs[:len(h.msgs)-1]
 	}
 
-	h.msgs = h.msgs[:len(h.msgs)-1] // the newest own message is one line again
 	m.input.SetValue("half typed")
 	msg, _ := m.lastOwn()
 	m.edit(msg)
