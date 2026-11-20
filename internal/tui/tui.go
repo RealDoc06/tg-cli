@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -106,8 +107,10 @@ type (
 		err    error
 	}
 	sentMsg struct {
-		msg core.Message
-		err error
+		chatID int64
+		req    core.SendRequest
+		msg    core.Message
+		err    error
 	}
 	// imageMsg carries a picture ready to upload, png is nil when it could
 	// not be loaded.
@@ -121,10 +124,12 @@ type (
 		key imageKey
 		img shown
 	}
-	// clipboardMsg carries an image read from the system clipboard.
+	// clipboardMsg carries an image read from the system clipboard for the
+	// composer of chatID.
 	clipboardMsg struct {
-		png []byte
-		err error
+		chatID int64
+		png    []byte
+		err    error
 	}
 	errMsg   struct{ err error }
 	eventMsg core.Event
@@ -270,6 +275,12 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case sentMsg:
 		if msg.err != nil {
 			m.status = "send failed: " + msg.err.Error()
+			// Give the message back, so it is not lost, unless something
+			// else was written since.
+			if msg.chatID == m.openID && m.input.Value() == "" && !m.attached() {
+				m.input.SetValue(msg.req.Text)
+				m.attach, m.attach.Text = msg.req, ""
+			}
 			return nil
 		}
 		m.addMessage(msg.msg, nil)
@@ -308,10 +319,20 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 
 	case uploadedMsg:
 		m.images[msg.key] = msg.img
+		// When reading older messages, the photo grows downwards instead of
+		// pushing what is above it out of view.
+		if msg.key.msg != 0 && msg.key.chat == m.openID && m.scroll > 0 {
+			m.scroll += msg.img.rows
+		}
 		return nil
 
 	case clipboardMsg:
-		if msg.err != nil {
+		switch {
+		case msg.chatID != m.openID:
+			return nil // the image was meant for another chat
+		case errors.Is(msg.err, clipboard.ErrNoImage):
+			return textinput.Paste // no image, ctrl+v pastes text as before
+		case msg.err != nil:
 			m.status = msg.err.Error()
 			return nil
 		}
@@ -434,7 +455,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 			chatID := m.openID
 			return func() tea.Msg {
 				sent, err := m.be.Send(m.ctx, chatID, req)
-				return sentMsg{sent, err}
+				return sentMsg{chatID, req, sent, err}
 			}
 		}
 		var cmd tea.Cmd
@@ -464,13 +485,15 @@ func (m *model) paste(text string) tea.Cmd {
 // pasteImage reads an image from the system clipboard, for terminals that
 // only paste text.
 func (m *model) pasteImage() tea.Msg {
+	chatID := m.openID
 	data, err := clipboard.Image(m.ctx)
-	return clipboardMsg{data, err}
+	return clipboardMsg{chatID, data, err}
 }
 
-// imagePath reports whether pasted text is the path of one image file. File
-// managers and terminals paste it as a file:// URL, quoted, or with spaces
-// escaped by backslashes, so each reading is tried.
+// imagePath reports whether pasted text is the absolute path of one image
+// file. File managers and terminals paste it as a file:// URL, quoted, or with
+// spaces escaped by backslashes, so each reading is tried. A bare file name is
+// text: it only names a file by chance.
 func imagePath(text string) (string, bool) {
 	text = strings.TrimSpace(text)
 	candidates := []string{text, strings.Trim(text, `'"`), strings.ReplaceAll(text, `\`, "")}
@@ -478,7 +501,10 @@ func imagePath(text string) (string, bool) {
 		candidates = append(candidates, u.Path)
 	}
 	for _, path := range candidates {
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && core.IsPhotoFile(path) {
+		if !filepath.IsAbs(path) || !core.IsPhotoFile(path) {
+			continue
+		}
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
 			return path, true
 		}
 	}
@@ -571,7 +597,8 @@ func (m *model) loadPhotos() tea.Cmd {
 		}
 		msg := h.msgs[l.msg]
 		key := imageKey{msg.ChatID, msg.ID}
-		if _, seen := m.images[key]; seen {
+		// A photo sized for a wider pane is fetched again to fit.
+		if img, seen := m.images[key]; seen && img.cols <= maxCols {
 			continue
 		}
 		m.images[key] = shown{}
@@ -660,6 +687,7 @@ func (m *model) addMessage(msg core.Message, chat *core.Chat) {
 	if h := m.histories[msg.ChatID]; h != nil && h.loaded {
 		if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.ID }); i >= 0 {
 			h.msgs[i] = msg
+			delete(m.images, imageKey{msg.ChatID, msg.ID}) // an edit can replace the photo
 		} else {
 			h.msgs = append(h.msgs, msg)
 			if msg.ChatID == m.openID && m.scroll > 0 {

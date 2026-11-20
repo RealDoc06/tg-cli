@@ -213,9 +213,15 @@ func (m *model) conversation(w, h int) []string {
 	case m.attach.Photo != nil:
 		m.input.Prompt, m.input.Placeholder = "[image] > ", "add a caption"
 	case m.attach.File != "":
-		m.input.Prompt, m.input.Placeholder = "["+filepath.Base(m.attach.File)+"] > ", "add a caption"
+		name := strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return -1
+			}
+			return r
+		}, filepath.Base(m.attach.File))
+		m.input.Prompt, m.input.Placeholder = "["+ansi.Truncate(name, max(4, w/3), "…")+"] > ", "add a caption"
 	}
-	m.input.SetWidth(w - 2 - ansi.StringWidth(m.input.Prompt))
+	m.input.SetWidth(max(1, w-2-ansi.StringWidth(m.input.Prompt)))
 	rows = append(rows, fit(" "+m.input.View(), w))
 	return rows
 }
@@ -259,7 +265,7 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 		// A photo that is drawn replaces its "[photo]" label, unless the
 		// pane became too narrow for it.
 		photo := m.images[imageKey{msg.ChatID, msg.ID}]
-		if photo.id != 0 && photo.cols > w-indent-1 {
+		if msg.Media != core.MediaPhoto || photo.cols > w-indent-1 {
 			photo = shown{}
 		}
 		body := msg.Text

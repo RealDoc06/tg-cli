@@ -129,7 +129,7 @@ Run `tg` with no arguments.
 
 The mouse works too: click a chat, scroll either pane. New messages arrive live.
 
-To send a picture, copy it and press `ctrl+v` in the composer, or drop the file on the terminal, which pastes its path. Reading the clipboard uses `osascript` on macOS, PowerShell on Windows, and `wl-paste` or `xclip` on Linux. Over SSH it would read the remote machine's clipboard, so drop or paste a file path there instead.
+To send a picture, copy it and press `ctrl+v` in the composer, or drop the file on the terminal, which pastes its path. Reading the clipboard uses `osascript` on macOS, PowerShell on Windows, and `wl-paste` or `xclip` on Linux. Without an image in the clipboard, `ctrl+v` pastes text. Over SSH it would read the remote machine's clipboard, so drop or paste a file path there instead. Terminals that keep `ctrl+v` for themselves, like Windows Terminal, need that binding removed.
 
 ### Themes
 

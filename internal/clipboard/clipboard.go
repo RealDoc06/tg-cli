@@ -61,10 +61,10 @@ func unixImage(ctx context.Context) ([]byte, error) {
 	if os.Getenv("WAYLAND_DISPLAY") != "" {
 		name, args = "wl-paste", []string{"--no-newline", "--type", "image/png"}
 	}
+	if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") == "" {
+		return nil, errors.New("no clipboard here, over SSH paste the image's file path instead")
+	}
 	if _, err := exec.LookPath(name); err != nil {
-		if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") == "" {
-			return nil, errors.New("no clipboard here, over SSH paste the image's file path instead")
-		}
 		return nil, errors.New("reading images from the clipboard needs " + name + ", install it or paste the image's file path")
 	}
 	out, err := exec.CommandContext(ctx, name, args...).Output()

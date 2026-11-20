@@ -228,3 +228,33 @@ func TestPastedImagePathIsSentAsPhoto(t *testing.T) {
 		t.Error("the attachment is still there after sending")
 	}
 }
+
+// An attachment's name is shown in the prompt. A long one must not push the
+// composer past the pane, which made the text input panic.
+func TestLongAttachmentNameFits(t *testing.T) {
+	m := loaded(t, 80, 24)
+	open(t, m, 1)
+	m.attach = core.SendRequest{File: "/tmp/" + strings.Repeat("screenshot", 8) + ".png"}
+	for i, row := range strings.Split(m.View().Content, "\n") {
+		if w := ansi.StringWidth(row); w != 80 {
+			t.Errorf("row %d is %d cells", i, w)
+		}
+	}
+}
+
+// Reading the clipboard takes a moment. An image that arrives after the user
+// switched chats must not be attached to the chat now open.
+func TestClipboardImageStaysWithItsChat(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	first := m.openID
+	open(t, m, 2)
+	m.Update(clipboardMsg{chatID: first, png: []byte("png")})
+	if m.attached() {
+		t.Error("an image read for another chat was attached")
+	}
+	m.Update(clipboardMsg{chatID: m.openID, png: []byte("png")})
+	if !m.attached() {
+		t.Error("the image was not attached")
+	}
+}
