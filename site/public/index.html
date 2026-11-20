@@ -92,6 +92,9 @@ code { font-family: var(--mono); font-size: .9em; color: var(--fg); white-space:
 .mark { font: 600 1.3rem var(--mono); letter-spacing: -.04em; }
 .top nav { display: flex; gap: 1.75rem; font-size: .95rem; color: var(--muted); }
 .top nav a:hover { color: var(--fg); }
+.top nav { align-items: center; }
+.gh { display: flex; }
+.gh svg { width: 1.25rem; height: 1.25rem; }
 
 .hero { display: grid; gap: 1.5rem; padding-block: clamp(2.5rem, 8vw, 6rem) clamp(2.5rem, 6vw, 4rem); }
 .note, figcaption { font-size: .95rem; color: var(--muted); }
@@ -101,6 +104,13 @@ section { padding-block: clamp(3rem, 7vw, 5.5rem); }
 .head { display: grid; gap: 1rem; margin-bottom: clamp(1.75rem, 4vw, 2.75rem); }
 .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(2rem, 5vw, 4rem); align-items: center; }
 .split .head { margin-bottom: 0; }
+/* Terminal first, words second: alternates with the guardrails section below. */
+.split.flip { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
+.split.flip > .head { order: 2; }
+.links { display: flex; flex-wrap: wrap; gap: .6rem 1.75rem; margin-top: .5rem; font-weight: 500; }
+.links a { color: var(--muted); }
+.links a:first-child { color: var(--sky); }
+.links a:hover { color: var(--fg); }
 
 .checks { display: grid; gap: .7rem; color: var(--muted); }
 .checks.row { display: flex; flex-wrap: wrap; gap: .7rem 2rem; margin-top: 1.5rem; }
@@ -206,7 +216,8 @@ footer nav { display: flex; flex-wrap: wrap; gap: .6rem 1.5rem; }
 footer a:hover { color: var(--fg); }
 
 @media (max-width: 56rem) {
-  .split { grid-template-columns: minmax(0, 1fr); }
+  .split, .split.flip { grid-template-columns: minmax(0, 1fr); }
+  .split.flip > .head { order: 0; }
 }
 @media (max-width: 40rem) {
   .phone-only { display: block; }
@@ -228,8 +239,9 @@ footer a:hover { color: var(--fg); }
 <header class="wrap top">
   <a class="mark" href="/" aria-label="tg">tg<span class="cur"></span></a>
   <nav>
+    <a href="https://github.com/RealDoc06/tg-cli/fork">Fork</a>
     <a href="https://github.com/RealDoc06/tg-cli#readme">Docs</a>
-    <a href="https://github.com/RealDoc06/tg-cli">GitHub</a>
+    <a class="gh" href="https://github.com/RealDoc06/tg-cli" aria-label="GitHub" title="GitHub"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.07 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .32.21.69.82.57A12 12 0 0 0 12 .3"/></svg></a>
   </nav>
 </header>
 
@@ -351,6 +363,37 @@ them, to real people, and cannot be taken back by this tool.
   </div>
 </section>
 
+<section id="contribute">
+  <div class="wrap split flip">
+    <div class="head">
+      <h2>Fork it.<br>Make it yours.</h2>
+      <p class="lead">One Go module, no services. The demo backend runs the whole client on sample chats, so you can hack on it without an account.</p>
+      <ul class="checks">
+        <li>Every Telegram call behind one interface</li>
+        <li>Focused tests, one command</li>
+        <li><code>AGENTS.md</code> onboards your coding agent</li>
+      </ul>
+      <p class="links">
+        <a href="https://github.com/RealDoc06/tg-cli/fork">Fork on GitHub</a>
+        <a href="https://github.com/RealDoc06/tg-cli/blob/main/AGENTS.md">Read AGENTS.md</a>
+        <a href="https://github.com/RealDoc06/tg-cli/issues">Issues</a>
+      </p>
+    </div>
+    <div class="term" data-term>
+      <div class="bar"><span class="label">hacking</span><button type="button" class="replay" data-replay aria-label="Replay the hacking session" title="Replay"><svg class="stroke" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button></div>
+<pre tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">git clone https://github.com/RealDoc06/tg-cli &amp;&amp; cd tg-cli</span>
+</span><span><span class="p">$ </span><span class="c">TG_DEMO=1 go run ./cmd/tg</span><span class="k">   # sample chats, no account</span>
+</span><span><span class="p">$ </span><span class="c">go test ./...</span>
+</span><span class="t">ok    internal/cli    0.224s
+ok    internal/core   (cached)
+ok    internal/mtp    (cached)
+ok    internal/tui    0.323s
+</span><span><span class="p">$ </span><span class="c">claude "read AGENTS.md, then add a theme"</span>
+</span><span><span class="p">$ </span><span class="cur"></span></span></pre>
+    </div>
+  </div>
+</section>
+
 <section id="guardrails">
   <div class="wrap split">
     <div class="head">
@@ -415,7 +458,8 @@ function paintCommand(text) {
   let program = true;
   return text.split(/("[^"]*"|\s+|\|)/).filter(Boolean).map((token) => {
     if (!token.trim()) return token;
-    if (token === '|') { program = true; return paint('op', token); }
+    if (token === '|' || token === '&&') { program = true; return paint('op', token); }
+    if (program && /^\w+=/.test(token)) return paint('flag', token); // an environment variable before the program
     if (program) { program = false; return paint('fn', token); }
     if (token.startsWith('"')) return paint('str', token);
     if (token.startsWith('-')) return paint('flag', token);
