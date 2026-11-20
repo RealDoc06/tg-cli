@@ -1,18 +1,19 @@
-# The landing page at https://tg-cli.realdoc06.it: the static files in public/,
-# served by Caddy. Nexora terminates TLS and reaches the container as
-# tg-cli-site:8080 on the proxy network.
+# The landing page at https://tgc.li: the static files in public/, served by
+# Caddy with the Caddyfile next to this file. Nexora terminates TLS and reaches
+# the container as tg-cli-site:8080 on the proxy network.
 #
 # Deploy from the repository root:
 #   tar -C site -c . | ssh <host> 'mkdir -p tg-cli-site && tar -C tg-cli-site -x'
 #   ssh <host> docker compose -f tg-cli-site/compose.yml up -d
-# public/ is mounted, so copying the files again is enough to update the live page.
+# public/ is mounted, so copying the files again is enough to update the live
+# page. After a change to the Caddyfile, add --force-recreate to the second command.
 services:
   site:
     image: caddy:2-alpine
     container_name: tg-cli-site
     restart: unless-stopped
-    command: caddy file-server --root /srv --listen :8080
     volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./public:/srv:ro
     read_only: true
     tmpfs: [/config, /data]

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs tg, the Telegram CLI and TUI: https://github.com/RealDoc06/tg-cli
 #
-#   curl -fsSL https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.sh | bash
+#   curl -fsSL https://tgc.li/install.sh | bash
 #
 # Works on Linux, macOS and Windows (Git Bash, MSYS2 or WSL). The binary goes
 # to ~/.local/bin, or to $TG_INSTALL_DIR. tg keeps itself up to date after.

@@ -17,7 +17,7 @@ A Telegram user client in one Go binary: commands for agents, a TUI for humans. 
 | `internal/config` | File locations and `config.json`: credentials, accounts, guardrails |
 | `install.sh`, `install.ps1` | One line installers |
 | `scripts/` | Release build, terminal screenshots |
-| `site/` | Landing page at tg-cli.realdoc06.it: static files in `public/`, served by the container in `compose.yml` |
+| `site/` | Landing page at tgc.li: static files in `public/`, served by the container in `compose.yml`. It also redirects `/install.sh` and `/install.ps1` to the scripts on main |
 
 ## Commands
 

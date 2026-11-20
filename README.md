@@ -7,13 +7,13 @@ Telegram for agents and humans. One small binary that gives agents and scripts r
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.sh | bash
+curl -fsSL https://tgc.li/install.sh | bash
 ```
 
 Works on Linux, macOS and Windows (Git Bash, MSYS2, WSL). From PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.ps1 | iex
+irm https://tgc.li/install.ps1 | iex
 ```
 
 Then log in once:

@@ -1,0 +1,14 @@
+# Serves public/ on :8080. The installers are not copied here: /install.sh and
+# /install.ps1 redirect to the ones on main, so the short install command always
+# runs the current script.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	root * /srv
+	redir /install.sh https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.sh
+	redir /install.ps1 https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.ps1
+	file_server
+}

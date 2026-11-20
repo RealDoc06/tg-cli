@@ -18,8 +18,8 @@
 <meta property="og:type" content="website">
 <meta property="og:title" content="tg · Telegram for agents and humans">
 <meta property="og:description" content="One binary. Plain commands for your agent, a fast terminal client for you.">
-<meta property="og:url" content="https://tg-cli.realdoc06.it/">
-<meta property="og:image" content="https://tg-cli.realdoc06.it/img/tui.png">
+<meta property="og:url" content="https://tgc.li/">
+<meta property="og:image" content="https://tgc.li/img/tui.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -241,7 +241,7 @@ footer a:hover { color: var(--fg); }
       </div>
     </div>
     <div class="cmd">
-      <code><span class="p" id="install-prompt">$ </span><span id="install-cmd">curl -fsSL https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.sh | bash</span></code>
+      <code><span class="p" id="install-prompt">$ </span><span id="install-cmd">curl -fsSL https://tgc.li/install.sh | bash</span></code>
       <button type="button" class="copy" id="copy" aria-label="Copy">
         <svg class="stroke sheets" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>
         <svg class="stroke check" viewBox="0 0 24 24" aria-hidden="true"><path pathLength="1" d="M5 12.5 9.5 17 19 7.5"/></svg>
@@ -387,10 +387,10 @@ them, to real people, and cannot be taken back by this tool.
 
 <script>
 // Install command: one for macOS and Linux, one for Windows, preselected from the visitor's system.
-const RAW = 'https://raw.githubusercontent.com/RealDoc06/tg-cli/main/';
+// The site redirects both installers to the scripts on main.
 const SYSTEMS = {
-  unix: { prompt: '$ ', command: `curl -fsSL ${RAW}install.sh | bash`, note: 'amd64 and arm64.' },
-  windows: { prompt: '> ', command: `irm ${RAW}install.ps1 | iex`, note: 'PowerShell. In Git Bash, MSYS2 or WSL use the macOS / Linux command.' },
+  unix: { prompt: '$ ', command: 'curl -fsSL https://tgc.li/install.sh | bash', note: 'amd64 and arm64.' },
+  windows: { prompt: '> ', command: 'irm https://tgc.li/install.ps1 | iex', note: 'PowerShell. In Git Bash, MSYS2 or WSL use the macOS / Linux command.' },
 };
 
 const platform = `${navigator.userAgentData?.platform ?? ''} ${navigator.platform ?? ''} ${navigator.userAgent}`;

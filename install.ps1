@@ -1,6 +1,6 @@
 # Installs tg, the Telegram CLI and TUI, on Windows from PowerShell:
 #
-#   irm https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.ps1 | iex
+#   irm https://tgc.li/install.ps1 | iex
 #
 # The binary goes to %LOCALAPPDATA%\Programs\tg, which is added to the user
 # PATH. tg keeps itself up to date afterwards.
