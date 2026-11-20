@@ -65,3 +65,6 @@ RULES
   4. To wait for an answer use `tg watch`, do not poll `tg read` in a loop.
   5. `tg watch` skips messages sent from this account. Agents sharing one
      account all look like `me`: pass --outgoing to see each other.
+  6. `tg` alone opens a TUI for your user. It is not for you: never open it,
+     not in a terminal you drive (tmux, a pty) and not with computer use.
+     Every command you need is listed above.

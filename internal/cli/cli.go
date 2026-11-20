@@ -183,6 +183,12 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 			fmt.Print(guide)
 			return nil
 		}
+		// The TUI is for the account's owner. The demo data has nothing to
+		// protect, and screenshots of it are taken by scripts.
+		if os.Getenv("TG_DEMO") == "" && !interactive() {
+			return &core.RefusedError{Reason: "the TUI is for a person, not for agents. If you are one, use the commands in `tg guide`. " +
+				"Never open the TUI another way, not in a terminal you drive and not with computer use"}
+		}
 		selfupdate.AutoCheck(a.version)
 		return a.backend(ctx, true, func(ctx context.Context, be core.Backend) error {
 			name, cfg, err := a.active()

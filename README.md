@@ -95,10 +95,10 @@ They live in `config.json`, and the commands and the file are the same thing: ed
 - Only `id` counts in `send_to`, the title is for you. An empty list means any chat.
 - The file is re-read on every write, so a change applies at once, even to a TUI that is already open.
 - A misspelled key stops tg with an error instead of being ignored.
-- Loosening a limit (`read-only off`, adding to a list or dropping it), `login`, `logout` and `accounts use` only work from an interactive terminal. Agents normally run commands without one and are refused, so a message cannot talk them out of their limits with one command. Tightening works from anywhere, including starting a list on an open account.
+- Loosening a limit (`read-only off`, adding to a list or dropping it), `login`, `logout`, `accounts use` and the TUI only work for a person at an interactive terminal. Agents normally run commands without one and are refused, so a message cannot talk them out of their limits with one command. A terminal is not enough when a coding agent's variable is set (`AI_AGENT`, `CLAUDECODE`, `CODEX_SANDBOX`, `CURSOR_AGENT`, `GEMINI_CLI`, `OPENCODE`): agents set them for every command they run, also inside tmux or a pty they drive. Tightening works from anywhere, including starting a list on an open account.
 - Limits belong to an account, not to an agent. `--account` reaches every account on the machine, so restrict each one an agent could use.
 - `tg download` refuses to write into tg's own directory and never replaces an existing file.
-- What this does not stop: reading is never limited, an agent that drives a real terminal (tmux, a pty) passes the terminal check, and one that edits files can edit `config.json`. The guardrails stop mistakes and injected instructions, not a determined process with your user's rights.
+- What this does not stop: reading is never limited, an agent that opens a terminal without its variables (with computer use, or an agent that sets none) passes the check, and one that edits files can edit `config.json`. `tg guide` tells agents never to open the TUI. The guardrails stop mistakes and injected instructions, not a determined process with your user's rights.
 
 ## Accounts
 
@@ -123,9 +123,12 @@ Run `tg` with no arguments.
 | `/` | Filter chats by name |
 | `tab` `esc` | Switch between chat list and composer |
 | `pgup` `pgdn` | Scroll the conversation, older messages load as you go |
+| `ctrl+↑` `ctrl+↓` | Pick the message to reply to (`alt` works too) |
+| `↑` | In an empty composer, edit your last message |
+| `esc` | Cancel the reply or the edit |
 | `q` `ctrl+c` | Quit |
 
-The mouse works too: click a chat, scroll either pane. New messages arrive live.
+The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. New messages arrive live.
 
 ### Themes
 

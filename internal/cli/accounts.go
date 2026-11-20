@@ -18,11 +18,29 @@ import (
 	"github.com/RealDoc06/tg-cli/internal/tui"
 )
 
-// interactive reports whether tg is run from a terminal, which is as close
-// as it can get to knowing a person is there. An agent that drives a real
-// terminal passes: the README says so. Tests replace it.
+// interactive reports whether a person runs tg: from a terminal, and not
+// under a coding agent. An agent that drives a terminal it did not start
+// from its own shell, such as one it opens with computer use, still passes:
+// the README says so. Tests replace it.
 var interactive = func() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	return agentEnv() == "" && term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// agentVars are set by coding agents in the environment of the commands they
+// run, including inside a terminal they drive (tmux, a pty).
+var agentVars = []string{
+	"AI_AGENT", "CLAUDECODE", "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED",
+	"CURSOR_AGENT", "GEMINI_CLI", "OPENCODE",
+}
+
+// agentEnv returns the first of agentVars that is set, "" when none is.
+func agentEnv() string {
+	for _, name := range agentVars {
+		if os.Getenv(name) != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 // needPerson refuses to loosen guardrails, to log in or to remove an account
@@ -207,7 +225,7 @@ the same thing.
   tg config theme               list the TUI themes
   tg config theme <name>        pick the TUI's colors, for every account
 
-Guardrails apply to every write: sending, marking as read, creating groups.
+Guardrails apply to every write: sending, editing, marking as read, creating groups.
 Reading is never limited. Making them looser needs a person at a terminal:
 turning read-only off, adding to a list or dropping it. Tightening does not.`
 	lift := c.flags.Bool("any", false, "with allow: lift the limit, any chat can be written to")

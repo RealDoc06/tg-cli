@@ -286,6 +286,15 @@ func (b *backend) Send(ctx context.Context, chatID int64, req core.SendRequest) 
 	return sent, nil
 }
 
+func (b *backend) Edit(ctx context.Context, chatID int64, msgID int, text string) error {
+	peer, err := b.peers.input(chatID)
+	if err != nil {
+		return err
+	}
+	_, err = b.sender.To(peer).Edit(msgID).Text(ctx, text)
+	return err
+}
+
 func (b *backend) MarkRead(ctx context.Context, chatID int64, maxID int) error {
 	peer, err := b.peers.input(chatID)
 	if err != nil {

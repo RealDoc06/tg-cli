@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,17 +47,21 @@ func open(t *testing.T, m *model, i int) {
 func TestViewFillsTheTerminal(t *testing.T) {
 	for _, size := range [][2]int{{120, 30}, {80, 24}, {72, 10}, {50, 20}, {20, 6}} {
 		m := loaded(t, size[0], size[1])
-		for _, opened := range []bool{false, true} {
-			if opened {
+		for _, state := range []string{"list", "opened", "replying with a menu open"} {
+			switch state {
+			case "opened":
 				open(t, m, 1)
+			case "replying with a menu open":
+				m.pickReply(-1)
+				m.openMenu(m.width-1, m.height-5) // the newest message
 			}
 			rows := strings.Split(m.View().Content, "\n")
 			if len(rows) != size[1] {
-				t.Errorf("%v opened=%v: %d rows", size, opened, len(rows))
+				t.Errorf("%v %s: %d rows", size, state, len(rows))
 			}
 			for i, row := range rows {
 				if w := ansi.StringWidth(row); w != size[0] {
-					t.Errorf("%v opened=%v: row %d is %d cells: %q", size, opened, i, w, ansi.Strip(row))
+					t.Errorf("%v %s: row %d is %d cells: %q", size, state, i, w, ansi.Strip(row))
 				}
 			}
 		}
@@ -131,5 +136,72 @@ func TestLongErrorIsShown(t *testing.T) {
 	rows := strings.Split(m.View().Content, "\n")
 	if last := ansi.Strip(rows[len(rows)-1]); !strings.Contains(last, `account "work" is read-only`) {
 		t.Errorf("status line: %q", last)
+	}
+}
+
+// screenRow is the row the text is drawn on, -1 when it is not on screen.
+func screenRow(m *model, text string) int {
+	return slices.IndexFunc(strings.Split(m.View().Content, "\n"), func(row string) bool {
+		return strings.Contains(ansi.Strip(row), text)
+	})
+}
+
+// A right click must act on the message under the pointer, and an edit must
+// reach the backend and show at once.
+func TestRightClickEditsTheClickedMessage(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	const original = "I'll move the media VM back tonight"
+	y := screenRow(m, original)
+	m.Update(tea.MouseClickMsg{X: 90, Y: y, Button: tea.MouseRight})
+	if m.menu == nil || m.menu.msg.Text != original {
+		t.Fatalf("menu: %+v", m.menu)
+	}
+	i := slices.IndexFunc(m.menu.items, func(item menuItem) bool { return item.label == "Edit" })
+	m.Update(tea.MouseClickMsg{X: m.menu.x, Y: m.menu.y + i, Button: tea.MouseLeft})
+	if m.menu != nil || m.input.Value() != original {
+		t.Fatalf("after picking Edit: menu %v, composer %q", m.menu, m.input.Value())
+	}
+
+	m.input.SetValue("moving it at 9pm")
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.Update(cmd())
+	if y := screenRow(m, "moving it at 9pm (edited)"); y < 0 {
+		t.Error("the edit is not on screen")
+	}
+	saved, _ := m.be.History(m.ctx, m.openID, core.HistoryQuery{Limit: historyPage})
+	if !slices.ContainsFunc(saved, func(msg core.Message) bool { return msg.Text == "moving it at 9pm" && msg.Edited }) {
+		t.Error("the backend did not get the edit")
+	}
+}
+
+// ctrl+up and ctrl+down walk the reply through the messages, as in Telegram,
+// and the message sent answers the one picked.
+func TestCtrlArrowsPickTheReply(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	msgs := m.histories[m.openID].msgs
+	up := tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModCtrl}
+	down := tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModCtrl}
+
+	m.Update(up)
+	m.Update(up)
+	if want := msgs[len(msgs)-2].ID; m.replyTo != want {
+		t.Fatalf("after two ctrl+up the reply is to %d, want %d", m.replyTo, want)
+	}
+	m.Update(down)
+	m.Update(down)
+	if m.replyTo != 0 {
+		t.Fatalf("going past the newest message kept the reply to %d", m.replyTo)
+	}
+
+	m.Update(up)
+	for _, r := range "on it" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	sent := cmd().(sentMsg)
+	if want := msgs[len(msgs)-1].ID; sent.msg.ReplyTo != want || m.replyTo != 0 {
+		t.Errorf("sent a reply to %d, want %d; reply left set to %d", sent.msg.ReplyTo, want, m.replyTo)
 	}
 }

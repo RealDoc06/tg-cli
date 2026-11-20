@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -66,12 +67,30 @@ type model struct {
 
 	input  textinput.Model
 	filter textinput.Model
+	// The composer replies to replyTo, or saves an edit of editing instead
+	// of sending. At most one is set, 0 means none.
+	replyTo, editing int
+	menu             *menu // the open context menu, nil when there is none
 
 	// avatars maps chat ID to an uploaded image ID, 0 while it is loading.
 	avatars   map[int64]int
 	lastImage int
 
-	status string
+	status string // an error, shown instead of the hints
+	note   string // a confirmation, like "copied", shown the same way
+}
+
+// menu is the context menu of one message, opened with a right click.
+type menu struct {
+	msg   core.Message
+	items []menuItem
+	x, y  int // top left cell on screen
+	sel   int
+}
+
+type menuItem struct {
+	label string
+	run   func(m *model, msg core.Message) tea.Cmd
 }
 
 type (
@@ -88,6 +107,12 @@ type (
 	sentMsg struct {
 		msg core.Message
 		err error
+	}
+	editedMsg struct {
+		chatID int64
+		id     int
+		text   string
+		err    error
 	}
 	avatarMsg struct {
 		chatID int64
@@ -167,6 +192,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.key(msg)
 
 	case tea.MouseWheelMsg:
+		m.menu = nil
 		delta := 1
 		if msg.Button == tea.MouseWheelUp {
 			delta = -1
@@ -180,7 +206,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseClickMsg:
 		lw, _ := m.layout()
-		if msg.Button != tea.MouseLeft || msg.Y < 1 || msg.Y >= m.height-1 {
+		if m.menu != nil {
+			if i := msg.Y - m.menu.y; msg.Button == tea.MouseLeft && i >= 0 && i < len(m.menu.items) &&
+				msg.X >= m.menu.x && msg.X < m.menu.x+menuWidth(m.menu.items) {
+				m.menu.sel = i
+				return m, m.runMenu()
+			}
+			m.menu = nil // a click elsewhere closes it, a right click opens another
+			if msg.Button != tea.MouseRight {
+				return m, nil
+			}
+		}
+		if msg.Y < 1 || msg.Y >= m.height-1 {
+			return m, nil
+		}
+		if msg.Button == tea.MouseRight {
+			if msg.X >= lw {
+				m.openMenu(msg.X, msg.Y)
+			}
+			return m, nil
+		}
+		if msg.Button != tea.MouseLeft {
 			return m, nil
 		}
 		if msg.X >= lw {
@@ -236,6 +282,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scroll = 0
 		return m, nil
 
+	case editedMsg:
+		if msg.err != nil {
+			m.status = "edit failed: " + msg.err.Error()
+			return m, nil
+		}
+		if h := m.histories[msg.chatID]; h != nil {
+			if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.id }); i >= 0 {
+				h.msgs[i].Text, h.msgs[i].Edited = msg.text, true
+			}
+		}
+		if c := m.chat(msg.chatID); c != nil && c.Last != nil && c.Last.ID == msg.id {
+			last := *c.Last
+			last.Text, last.Edited = msg.text, true
+			c.Last = &last
+		}
+		return m, nil
+
 	case eventMsg:
 		ev := core.Event(msg)
 		if ev.Kind == core.EventReady {
@@ -279,9 +342,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	key := msg.String()
-	m.status = ""
+	m.status, m.note = "", ""
 	if key == "ctrl+c" {
 		return tea.Quit
+	}
+
+	if m.menu != nil {
+		n := len(m.menu.items)
+		switch key {
+		case "up", "k", "shift+tab":
+			m.menu.sel = (m.menu.sel + n - 1) % n
+		case "down", "j", "tab":
+			m.menu.sel = (m.menu.sel + 1) % n
+		case "enter", "space":
+			return m.runMenu()
+		default:
+			m.menu = nil
+		}
+		return nil
 	}
 
 	// Navigation shared by the chat list and its filter.
@@ -346,8 +424,24 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 
 	default: // focusInput
 		switch key {
-		case "esc", "tab":
+		case "esc":
+			if m.replyTo != 0 || m.editing != 0 {
+				m.cancelDraft()
+				return nil
+			}
 			return m.setFocus(focusChats)
+		case "tab":
+			return m.setFocus(focusChats)
+		case "ctrl+up", "alt+up":
+			return m.pickReply(-1)
+		case "ctrl+down", "alt+down":
+			return m.pickReply(1)
+		case "up":
+			if m.input.Value() == "" {
+				if msg, ok := m.lastOwn(); ok {
+					return m.edit(msg)
+				}
+			}
 		case "pgup":
 			m.scroll += m.messageRows() / 2
 			return m.afterScroll()
@@ -355,21 +449,158 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 			m.scroll -= m.messageRows() / 2
 			return m.afterScroll()
 		case "enter":
-			text := strings.TrimSpace(m.input.Value())
-			if text == "" {
-				return nil
-			}
-			m.input.Reset()
-			chatID := m.openID
-			return func() tea.Msg {
-				sent, err := m.be.Send(m.ctx, chatID, core.SendRequest{Text: text})
-				return sentMsg{sent, err}
-			}
+			return m.submit()
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return cmd
 	}
+}
+
+// submit sends what is in the composer, as a reply when one is picked, or
+// saves it as the new text of the message being edited.
+func (m *model) submit() tea.Cmd {
+	text := strings.TrimSpace(m.input.Value())
+	chatID, replyTo, editing := m.openID, m.replyTo, m.editing
+	if editing != 0 {
+		if text == "" {
+			m.status = "a message cannot be empty, esc cancels the edit"
+			return nil
+		}
+		m.cancelDraft()
+		if msg, ok := m.message(editing); ok && msg.Text == text {
+			return nil
+		}
+		return func() tea.Msg {
+			return editedMsg{chatID, editing, text, m.be.Edit(m.ctx, chatID, editing, text)}
+		}
+	}
+	if text == "" {
+		return nil
+	}
+	m.input.Reset()
+	m.replyTo = 0
+	return func() tea.Msg {
+		sent, err := m.be.Send(m.ctx, chatID, core.SendRequest{Text: text, ReplyTo: replyTo})
+		return sentMsg{sent, err}
+	}
+}
+
+// reply makes the composer answer msg, edit starts editing it.
+func (m *model) reply(msg core.Message) tea.Cmd {
+	if m.editing != 0 {
+		m.cancelDraft()
+	}
+	m.replyTo = msg.ID
+	m.revealMessage(msg.ID)
+	return tea.Batch(m.setFocus(focusInput), m.afterScroll())
+}
+
+func (m *model) edit(msg core.Message) tea.Cmd {
+	m.replyTo, m.editing = 0, msg.ID
+	m.input.SetValue(msg.Text)
+	m.input.CursorEnd()
+	m.revealMessage(msg.ID)
+	return tea.Batch(m.setFocus(focusInput), m.afterScroll())
+}
+
+// cancelDraft drops the reply or the edit. The text of an edit goes with it,
+// a reply keeps what was typed.
+func (m *model) cancelDraft() {
+	if m.editing != 0 {
+		m.input.Reset()
+	}
+	m.replyTo, m.editing = 0, 0
+}
+
+// pickReply moves the reply to the message before (-1) or after (1) the one
+// picked, as Telegram does with ctrl+up and ctrl+down. Going past the newest
+// message drops the reply.
+func (m *model) pickReply(delta int) tea.Cmd {
+	h := m.histories[m.openID]
+	if h == nil {
+		return nil
+	}
+	msgs := slices.DeleteFunc(slices.Clone(h.msgs), func(msg core.Message) bool { return msg.Service })
+	i := slices.IndexFunc(msgs, func(msg core.Message) bool { return msg.ID == m.replyTo })
+	if i < 0 {
+		i = len(msgs)
+	}
+	i += delta
+	switch {
+	case i >= len(msgs):
+		m.replyTo = 0
+		return nil
+	case i < 0:
+		return nil // the oldest loaded message, page up loads more
+	}
+	return m.reply(msgs[i])
+}
+
+// lastOwn is the newest message the account sent in the open chat.
+func (m *model) lastOwn() (core.Message, bool) {
+	if h := m.histories[m.openID]; h != nil {
+		for i := len(h.msgs) - 1; i >= 0; i-- {
+			if h.msgs[i].Out && !h.msgs[i].Service {
+				return h.msgs[i], true
+			}
+		}
+	}
+	return core.Message{}, false
+}
+
+// message finds a loaded message of the open chat.
+func (m *model) message(id int) (core.Message, bool) {
+	if h := m.histories[m.openID]; h != nil {
+		if i := slices.IndexFunc(h.msgs, func(msg core.Message) bool { return msg.ID == id }); i >= 0 {
+			return h.msgs[i], true
+		}
+	}
+	return core.Message{}, false
+}
+
+// openMenu opens the context menu of the message drawn at screen cell x, y,
+// if there is one.
+func (m *model) openMenu(x, y int) {
+	msg, ok := m.messageAt(y)
+	if !ok {
+		return
+	}
+	var items []menuItem
+	if !msg.Service {
+		items = append(items, menuItem{"Reply", (*model).reply})
+	}
+	if msg.Out && !msg.Service {
+		items = append(items, menuItem{"Edit", (*model).edit})
+	}
+	if msg.Text != "" {
+		items = append(items, menuItem{"Copy text", func(m *model, msg core.Message) tea.Cmd {
+			return m.copy(msg.Text, "text")
+		}})
+	}
+	items = append(items, menuItem{"Copy message ID", func(m *model, msg core.Message) tea.Cmd {
+		return m.copy(strconv.Itoa(msg.ID), "message ID "+strconv.Itoa(msg.ID))
+	}})
+	// Open where the click was, moved in so the whole menu stays on screen.
+	lw, _ := m.layout()
+	if lw > 0 {
+		lw++ // the border
+	}
+	x = max(lw, min(x, m.width-menuWidth(items)))
+	y = max(0, min(y, m.height-1-len(items)))
+	m.menu = &menu{msg: msg, items: items, x: x, y: y}
+}
+
+func (m *model) runMenu() tea.Cmd {
+	menu := m.menu
+	m.menu = nil
+	return menu.items[menu.sel].run(m, menu.msg)
+}
+
+// copy puts s on the clipboard with OSC 52, which also works over SSH.
+func (m *model) copy(s, what string) tea.Cmd {
+	m.note = "copied " + what
+	return tea.SetClipboard(s)
 }
 
 func (m *model) setFocus(f focus) tea.Cmd {
@@ -448,7 +679,8 @@ func (m *model) afterScroll() tea.Cmd {
 		return nil
 	}
 	_, rw := m.layout()
-	limit := max(0, len(m.messageLines(h, rw))-m.messageRows())
+	lines, _ := m.messageLines(h, rw)
+	limit := max(0, len(lines)-m.messageRows())
 	m.scroll = max(0, min(m.scroll, limit))
 	if m.scroll < limit || h.done || h.loading || len(h.msgs) == 0 {
 		return nil
@@ -468,6 +700,7 @@ func (m *model) openSelected() tea.Cmd {
 	}
 	chatID := chats[m.sel].ID
 	m.openID, m.scroll = chatID, 0
+	m.replyTo, m.editing = 0, 0
 	m.input.Reset()
 	cmds := []tea.Cmd{m.setFocus(focusInput)}
 	if h := m.histories[chatID]; h == nil {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -27,10 +28,75 @@ func (m *model) layout() (left, right int) {
 	return left, m.width - left - 1
 }
 
-// listRows is how many chats fit in the list, messageRows how many lines of
-// conversation fit above the composer.
-func (m *model) listRows() int    { return max(1, (m.height-2)/2) }
-func (m *model) messageRows() int { return max(1, m.height-3) }
+// listRows is how many chats fit in the list.
+func (m *model) listRows() int { return max(1, (m.height-2)/2) }
+
+// The conversation pane is, top to bottom: the title and a gap, the messages,
+// a gap, the reply or edit being written when there is one, and the composer.
+const messagesTop = 2
+
+func (m *model) draftRows() int {
+	if m.replyTo != 0 || m.editing != 0 {
+		return 1
+	}
+	return 0
+}
+
+// messageRows is how many lines of conversation fit.
+func (m *model) messageRows() int { return max(1, m.height-1-messagesTop-m.draftRows()-2) }
+
+// shown picks the n lines of conversation that are on screen: lines[start:end],
+// drawn below pad empty rows. overflow is how many rows at the top of the pane
+// a tiny terminal cuts off.
+func (m *model) shown(n int) (start, end, pad, overflow int) {
+	view := m.messageRows()
+	end = max(0, n-m.scroll)
+	start = max(0, end-view)
+	overflow = max(0, messagesTop+view+m.draftRows()+2-(m.height-1))
+	return start, end, view - (end - start), overflow
+}
+
+// messageAt is the message drawn on screen row y.
+func (m *model) messageAt(y int) (core.Message, bool) {
+	h := m.histories[m.openID]
+	_, rw := m.layout()
+	if h == nil || !h.loaded || rw == 0 {
+		return core.Message{}, false
+	}
+	_, ids := m.messageLines(h, rw)
+	start, end, pad, overflow := m.shown(len(ids))
+	i := start + y - (messagesTop - overflow) - pad
+	if i < start || i >= end || ids[i] == 0 {
+		return core.Message{}, false
+	}
+	return m.message(ids[i])
+}
+
+// revealMessage scrolls the conversation so message id is on screen.
+func (m *model) revealMessage(id int) {
+	h := m.histories[m.openID]
+	_, rw := m.layout()
+	if h == nil || rw == 0 {
+		return
+	}
+	_, ids := m.messageLines(h, rw)
+	first, last := slices.Index(ids, id), -1
+	for i, line := range ids {
+		if line == id {
+			last = i
+		}
+	}
+	if first < 0 {
+		return
+	}
+	if end := len(ids) - m.scroll; last >= end {
+		m.scroll = len(ids) - 1 - last
+	}
+	if start := len(ids) - m.scroll - m.messageRows(); first < start {
+		m.scroll = len(ids) - first - m.messageRows()
+	}
+	m.scroll = max(0, m.scroll)
+}
 
 func (m *model) View() tea.View {
 	var v tea.View
@@ -65,6 +131,18 @@ func (m *model) View() tea.View {
 		}
 	}
 	rows = append(rows, m.statusLine())
+	if m.menu != nil {
+		w := menuWidth(m.menu.items)
+		for i, item := range m.menu.items {
+			style := m.st.menu
+			if i == m.menu.sel {
+				style = m.st.menuSel
+			}
+			if y := m.menu.y + i; y < len(rows) {
+				rows[y] = overlay(rows[y], style.Render(fit(" "+item.label, w)), m.menu.x, m.width)
+			}
+		}
+	}
 	v.SetContent(strings.Join(rows, "\n"))
 
 	// The terminal's own cursor marks the focused input, so nothing blinks
@@ -192,44 +270,81 @@ func (m *model) conversation(w, h int) []string {
 	}
 	rows = append(rows, spread(title, m.st.muted.Render(string(c.Kind))+" ", w))
 
-	lines := m.messageLines(hist, w)
+	rows = append(rows, strings.Repeat(" ", w))
+
+	lines, _ := m.messageLines(hist, w)
 	if !hist.loaded {
 		lines = []string{m.st.muted.Render(" loading")}
 	}
-	view := h - 2
-	end := max(0, len(lines)-m.scroll)
-	start := max(0, end-view)
-	for range view - (end - start) {
+	start, end, pad, overflow := m.shown(len(lines))
+	for range pad {
 		rows = append(rows, strings.Repeat(" ", w))
 	}
 	for _, l := range lines[start:end] {
 		rows = append(rows, fit(l, w))
 	}
 
+	rows = append(rows, strings.Repeat(" ", w))
+	if m.draftRows() > 0 {
+		rows = append(rows, m.draftLine(w))
+	}
 	m.input.SetWidth(w - 4)
 	m.input.Placeholder = "message " + c.Title
 	rows = append(rows, fit(" "+m.input.View(), w))
-	return rows
+	return rows[overflow:]
+}
+
+// draftLine names the message the composer replies to or edits.
+func (m *model) draftLine(w int) string {
+	id, label := m.replyTo, "Reply to "
+	if m.editing != 0 {
+		id, label = m.editing, "Edit"
+	}
+	msg, _ := m.message(id)
+	switch {
+	case m.editing != 0:
+	case msg.Out:
+		label += "You"
+	default:
+		label += msg.From
+	}
+	return fit(" "+m.st.accent.Render("▌"+label)+"  "+m.st.muted.Render(strings.Join(strings.Fields(msg.Preview()), " ")), w)
 }
 
 // messageLines lays the history out for a pane of width w: a date line per
-// day, then "HH:MM Name: text" wrapped with a hanging indent.
-func (m *model) messageLines(h *history, w int) []string {
+// day, then "HH:MM Name: text" wrapped with a hanging indent, with a gap
+// where the sender changes. ids holds the message ID of each line, 0 for
+// dates and gaps. The message being replied to or edited is marked.
+func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 	const indent = 7 // " HH:MM "
+	add := func(id int, line string) {
+		lines, ids = append(lines, line), append(ids, id)
+	}
 	byID := make(map[int]*core.Message, len(h.msgs))
-	var lines []string
 	var day string
+	var prev *core.Message
 	for i := range h.msgs {
 		msg := &h.msgs[i]
 		byID[msg.ID] = msg
 
 		if d := msg.Date.Format("Mon 2 Jan 2006"); d != day {
+			if day != "" {
+				add(0, "")
+			}
 			day = d
-			lines = append(lines, center(m.st.muted.Render(d), w))
+			add(0, center(m.st.muted.Render(d), w))
+		} else if prev != nil && (prev.Out != msg.Out || prev.FromID != msg.FromID || prev.Service != msg.Service) {
+			add(0, "")
+		}
+		prev = msg
+
+		mark := " "
+		if msg.ID == m.replyTo || msg.ID == m.editing {
+			mark = m.st.accent.Render("▌")
 		}
 		if ref := byID[msg.ReplyTo]; ref != nil {
 			quote := ansi.Truncate(firstWord(ref.From)+": "+strings.Join(strings.Fields(ref.Preview()), " "), w-indent-3, "…")
-			lines = append(lines, strings.Repeat(" ", indent)+m.st.muted.Render("↪ "+quote))
+			add(msg.ID, mark+strings.Repeat(" ", indent-1)+m.st.muted.Render("↪ "+quote))
 		}
 
 		name := lipgloss.NewStyle().Foreground(m.st.peer(msg.FromID)).Render(msg.From)
@@ -249,29 +364,38 @@ func (m *model) messageLines(h *history, w int) []string {
 		}
 
 		for j, l := range strings.Split(ansi.Wrap(text, max(10, w-indent-1), ""), "\n") {
-			prefix := strings.Repeat(" ", indent)
+			prefix := mark + strings.Repeat(" ", indent-1)
 			if j == 0 {
-				prefix = " " + m.st.muted.Render(msg.Date.Format("15:04")) + " "
+				prefix = mark + m.st.muted.Render(msg.Date.Format("15:04")) + " "
 			}
-			lines = append(lines, prefix+l)
+			add(msg.ID, prefix+l)
 		}
 	}
-	return lines
+	return lines, ids
 }
 
 func (m *model) statusLine() string {
 	// Each hint is a key and what it does.
 	hints := [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "compose"}, {"q", "quit"}}
-	switch m.focus {
-	case focusInput:
-		hints = [][2]string{{"enter", "send"}, {"pgup/pgdn", "scroll"}, {"esc", "chats"}, {"ctrl+c", "quit"}}
-	case focusFilter:
+	switch {
+	case m.menu != nil:
+		hints = [][2]string{{"↑↓", "move"}, {"enter", "pick"}, {"esc", "close"}}
+	case m.focus == focusInput && m.editing != 0:
+		hints = [][2]string{{"esc", "cancel"}}
+	case m.focus == focusInput && m.replyTo != 0:
+		hints = [][2]string{{"ctrl+↑↓", "pick"}, {"esc", "cancel"}}
+	case m.focus == focusInput:
+		hints = [][2]string{{"pgup/pgdn", "scroll"}, {"ctrl+↑↓", "reply"}, {"↑", "edit last"}, {"right click", "more"}, {"esc", "chats"}, {"ctrl+c", "quit"}}
+	case m.focus == focusFilter:
 		hints = [][2]string{{"type", "to filter"}, {"enter", "open"}, {"esc", "clear"}}
 	}
-	// An error takes the whole line: it is usually longer than what is left
-	// next to the hints, and matters more than them.
-	if m.status != "" {
+	// An error or a note takes the whole line: an error is usually longer
+	// than what is left next to the hints, and matters more than them.
+	switch {
+	case m.status != "":
 		return fit(" "+m.st.err.Render(m.status), m.width)
+	case m.note != "":
+		return fit(" "+m.st.accent.Render(m.note), m.width)
 	}
 	right := m.st.muted.Render("tg " + m.version)
 	if m.account != "" {
@@ -279,9 +403,26 @@ func (m *model) statusLine() string {
 	}
 	var help strings.Builder
 	for _, h := range hints {
-		help.WriteString(" " + m.st.text.Render(h[0]) + " " + m.st.muted.Render(h[1]) + " ")
+		help.WriteString(" " + m.st.key.Render(h[0]) + " " + m.st.dim.Render(h[1]) + " ")
 	}
 	return spread(help.String(), right+" ", m.width)
+}
+
+// menuWidth is the width of a context menu: its longest label, padded.
+func menuWidth(items []menuItem) int {
+	w := 0
+	for _, item := range items {
+		w = max(w, ansi.StringWidth(item.label))
+	}
+	return w + 3
+}
+
+// overlay draws box over row, a line w cells wide, from cell x on.
+func overlay(row, box string, x, w int) string {
+	left := ansi.Truncate(row, x, "")
+	left += strings.Repeat(" ", max(0, x-ansi.StringWidth(left)))
+	right := ansi.TruncateLeft(row, x+ansi.StringWidth(box), "")
+	return fit(left+ansi.ResetStyle+box+right, w)
 }
 
 // fit truncates or pads s to exactly w cells.

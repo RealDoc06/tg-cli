@@ -16,13 +16,15 @@ func (w *writes) Send(context.Context, int64, SendRequest) (Message, error) {
 	w.n++
 	return Message{}, nil
 }
-func (w *writes) MarkRead(context.Context, int64, int) error { w.n++; return nil }
+func (w *writes) Edit(context.Context, int64, int, string) error { w.n++; return nil }
+func (w *writes) MarkRead(context.Context, int64, int) error     { w.n++; return nil }
 func (w *writes) CreateGroup(context.Context, string) (Chat, error) {
 	w.n++
 	return Chat{}, nil
 }
 
 // attempt tries every kind of write on chatID and reports which were refused.
+// Editing follows the same rules as sending, so it is reported with it.
 func attempt(t *testing.T, policy Policy, chatID int64) (send, read, group bool, reached int) {
 	t.Helper()
 	backend := &writes{}
@@ -38,6 +40,9 @@ func attempt(t *testing.T, policy Policy, chatID int64) (send, read, group bool,
 	}
 	_, err := g.Send(context.Background(), chatID, SendRequest{Text: "x"})
 	send = refused(err)
+	if edit := refused(g.Edit(context.Background(), chatID, 1, "x")); edit != send {
+		t.Errorf("chat %d: editing refused=%v, sending refused=%v", chatID, edit, send)
+	}
 	read = refused(g.MarkRead(context.Background(), chatID, 1))
 	_, err = g.CreateGroup(context.Background(), "g")
 	group = refused(err)
@@ -64,7 +69,7 @@ func TestGuard(t *testing.T) {
 			t.Errorf("%s: refused send=%v read=%v group=%v", c.name, send, read, group)
 		}
 		allowed := 0
-		for _, refused := range []bool{c.send, c.read, c.group} {
+		for _, refused := range []bool{c.send, c.send, c.read, c.group} { // send twice: edit too
 			if !refused {
 				allowed++
 			}

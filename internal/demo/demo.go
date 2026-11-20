@@ -224,6 +224,21 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 	return m, nil
 }
 
+func (b *Backend) Edit(_ context.Context, chatID int64, msgID int, text string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	msgs := b.messages[chatID]
+	i := slices.IndexFunc(msgs, func(m core.Message) bool { return m.ID == msgID })
+	switch {
+	case i < 0:
+		return fmt.Errorf("no message %d in chat %d", msgID, chatID)
+	case !msgs[i].Out:
+		return fmt.Errorf("message %d was not sent by this account, only your own messages can be edited", msgID)
+	}
+	msgs[i].Text, msgs[i].Edited = text, true
+	return nil
+}
+
 func (b *Backend) MarkRead(_ context.Context, chatID int64, _ int) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

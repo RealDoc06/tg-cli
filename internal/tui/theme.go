@@ -84,6 +84,8 @@ type styles struct {
 	theme                             Theme
 	text, muted, border, accent, bold lipgloss.Style
 	err                               lipgloss.Style
+	key, dim                          lipgloss.Style // hints: the key stands out, what it does recedes
+	menu, menuSel                     lipgloss.Style // context menu items, and the selected one
 }
 
 func newStyles(t Theme) styles {
@@ -91,6 +93,11 @@ func newStyles(t Theme) styles {
 	return styles{
 		theme: t, text: fg(t.Text), muted: fg(t.Muted), border: fg(t.Border),
 		accent: fg(t.Accent), bold: lipgloss.NewStyle().Bold(true), err: fg(t.Error),
+		key: fg(t.Accent).Bold(true),
+		// A third of the way from muted to the background.
+		dim:     fg(lipgloss.Blend1D(4, t.Muted, t.Background)[1]),
+		menu:    lipgloss.NewStyle().Background(t.Border).Foreground(t.Text),
+		menuSel: lipgloss.NewStyle().Background(t.Accent).Foreground(t.Background),
 	}
 }
 
