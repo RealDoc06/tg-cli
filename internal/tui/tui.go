@@ -1182,6 +1182,9 @@ func (m *model) loadPictures() tea.Cmd {
 			m.drop(key)
 		}
 		seq := m.loading(key)
+		// Until it lands, the room it will land in is kept, even if the pane
+		// is resized meanwhile.
+		m.images[key] = shown{seq: seq, cols: keptCols, rows: keptRows}
 		view, jobs := m.view, m.jobs
 		cmds = append(cmds, func() tea.Msg {
 			select {

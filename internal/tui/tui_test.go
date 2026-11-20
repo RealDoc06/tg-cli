@@ -289,9 +289,21 @@ func TestPictureKeepsItsRoomWhileLoading(t *testing.T) {
 		t.Errorf("the conversation went from %d to %d lines when the pictures landed", before, after)
 	}
 
+	// A load started in a narrower pane lands at that size, so the room
+	// kept while it loads is that one, not what the pane fits by then.
+	m.drop(key)
+	_, pending := m.Update(tea.WindowSizeMsg{Width: 40, Height: 40})
+	m.Update(tea.WindowSizeMsg{Width: narrowWidth - 4, Height: 40})
+	waiting := len(m.messageLines(h, rw))
+	upload(m, pending)
+	if got := len(m.messageLines(h, rw)); got != waiting || m.images[key].id == 0 {
+		t.Errorf("a video loaded across a resize moved the conversation from %d to %d lines", waiting, got)
+	}
+
+	landed := m.images[key]
 	m.update(imageMsg{key: key, seq: m.loading(key)})
-	if got := len(m.messageLines(h, rw)); got != before-video.rows {
-		t.Errorf("a failed video leaves %d lines, want %d", got, before-video.rows)
+	if got, want := len(m.messageLines(h, rw)), waiting-landed.rows; got != want {
+		t.Errorf("a failed video leaves %d lines, want %d", got, want)
 	}
 }
 

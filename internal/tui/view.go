@@ -424,13 +424,14 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 		}
 		// A picture that is drawn replaces its "[photo]" label, unless the
 		// pane became too narrow for it. A video keeps it for its duration.
-		// Until it is drawn, its room is kept when its size is known.
+		// Until it is drawn, its room is kept when its size is known: the
+		// room its load will land in, once that started.
 		pic := m.images[imageKey{msg.ChatID, msg.ID}]
 		if msg.Picture == core.NoPicture || pic.cols > w-indent-1 {
 			pic = shown{}
 		}
 		keptRows := pic.rows
-		if pic.id == 0 {
+		if pic.id == 0 && keptRows == 0 {
 			_, keptRows = m.pictureCells(*msg, w)
 		}
 		body := msg.Text
