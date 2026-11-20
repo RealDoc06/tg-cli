@@ -90,9 +90,8 @@ code { font-family: var(--mono); font-size: .9em; color: var(--fg); white-space:
 
 .top { display: flex; align-items: center; justify-content: space-between; padding-block: 1.25rem; }
 .mark { font: 600 1.3rem var(--mono); letter-spacing: -.04em; }
-.top nav { display: flex; gap: 1.75rem; font-size: .95rem; color: var(--muted); }
+.top nav { display: flex; align-items: center; gap: 1.75rem; font-size: .95rem; color: var(--muted); }
 .top nav a:hover { color: var(--fg); }
-.top nav { align-items: center; }
 .gh { display: flex; }
 .gh svg { width: 1.25rem; height: 1.25rem; }
 
@@ -132,7 +131,7 @@ section { padding-block: clamp(3rem, 7vw, 5.5rem); }
 /* For screen readers only. */
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* Icons: .stroke are line drawings, .logo are the agents' own marks. */
+/* Icons: .stroke are line drawings, .logo are brand marks (the agents, GitHub). */
 .stroke { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .logo { fill: currentColor; fill-rule: evenodd; }
 
@@ -369,7 +368,7 @@ them, to real people, and cannot be taken back by this tool.
       <h2>Fork it.<br>Make it yours.</h2>
       <p class="lead">One Go module, no services. The demo backend runs the whole client on sample chats, so you can hack on it without an account.</p>
       <ul class="checks">
-        <li>Every Telegram call behind one interface</li>
+        <li>Chats and messages behind one interface</li>
         <li>Focused tests, one command</li>
         <li><code>AGENTS.md</code> onboards your coding agent</li>
       </ul>
@@ -381,13 +380,12 @@ them, to real people, and cannot be taken back by this tool.
     </div>
     <div class="term" data-term>
       <div class="bar"><span class="label">hacking</span><button type="button" class="replay" data-replay aria-label="Replay the hacking session" title="Replay"><svg class="stroke" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button></div>
-<pre tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">git clone https://github.com/RealDoc06/tg-cli &amp;&amp; cd tg-cli</span>
+<pre tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">gh repo fork RealDoc06/tg-cli --clone &amp;&amp; cd tg-cli</span>
 </span><span><span class="p">$ </span><span class="c">TG_DEMO=1 go run ./cmd/tg</span><span class="k">   # sample chats, no account</span>
-</span><span><span class="p">$ </span><span class="c">go test ./...</span>
-</span><span class="t">ok    internal/cli    0.224s
-ok    internal/core   (cached)
-ok    internal/mtp    (cached)
-ok    internal/tui    0.323s
+</span><span><span class="p">$ </span><span class="c">go test ./... | tail -3</span>
+</span><span class="t">ok  	github.com/RealDoc06/tg-cli/internal/selfupdate	0.012s
+ok  	github.com/RealDoc06/tg-cli/internal/termimg	0.076s
+ok  	github.com/RealDoc06/tg-cli/internal/tui	0.305s
 </span><span><span class="p">$ </span><span class="c">claude "read AGENTS.md, then add a theme"</span>
 </span><span><span class="p">$ </span><span class="cur"></span></span></pre>
     </div>
