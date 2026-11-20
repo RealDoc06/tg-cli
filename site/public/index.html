@@ -382,8 +382,9 @@ them, to real people, and cannot be taken back by this tool.
       <div class="bar"><span class="label">hacking</span><button type="button" class="replay" data-replay aria-label="Replay the hacking session" title="Replay"><svg class="stroke" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button></div>
 <pre tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">gh repo fork RealDoc06/tg-cli --clone &amp;&amp; cd tg-cli</span>
 </span><span><span class="p">$ </span><span class="c">TG_DEMO=1 go run ./cmd/tg</span><span class="k">   # sample chats, no account</span>
-</span><span><span class="p">$ </span><span class="c">go test ./... | tail -3</span>
-</span><span class="t">ok  	github.com/RealDoc06/tg-cli/internal/selfupdate	0.012s
+</span><span><span class="p">$ </span><span class="c">go test ./...</span>
+</span><span class="t"><span class="dim">…</span>
+ok  	github.com/RealDoc06/tg-cli/internal/selfupdate	0.012s
 ok  	github.com/RealDoc06/tg-cli/internal/termimg	0.076s
 ok  	github.com/RealDoc06/tg-cli/internal/tui	0.305s
 </span><span><span class="p">$ </span><span class="c">claude "read AGENTS.md, then add a theme"</span>
