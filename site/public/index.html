@@ -141,7 +141,8 @@ pre .cur { background: var(--text); }
 .install { max-width: 58rem; }
 .cmd { display: flex; align-items: center; gap: .75rem; padding: .5rem .5rem .5rem 1.1rem; }
 .cmd code { flex: 1; min-width: 0; font-size: clamp(.8rem, 1.4vw, .875rem); }
-/* Copy: an icon that turns into a green check once the command is copied. */
+/* Copy: once the command is copied the icon shrinks away while a check draws
+   itself in its place, on green. Both icons share one grid cell. */
 .copy {
   flex: none;
   display: grid;
@@ -152,13 +153,16 @@ pre .cur { background: var(--text); }
   border-radius: .5rem;
   background: none;
   color: var(--subtext);
-  transition: background-color .15s, color .15s;
+  transition: background-color .2s, color .2s;
 }
 .copy:hover { background: var(--surface); color: var(--text); }
-.copy svg { width: 1.1rem; height: 1.1rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.copy .check, .copy.done .sheets { display: none; }
+.copy svg { grid-area: 1 / 1; width: 1.1rem; height: 1.1rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: opacity .2s, transform .2s; }
+/* pathLength is 1. The dash starts a little before the path so its round cap stays out of sight. */
+.copy .check path { stroke-dasharray: 1 1.2; stroke-dashoffset: 1.1; transition: stroke-dashoffset .25s; }
+.copy .check, .copy.done .sheets { opacity: 0; transform: scale(.4); }
 .copy.done { background: var(--green); color: var(--crust); }
-.copy.done .check { display: block; }
+.copy.done .check { opacity: 1; transform: none; }
+.copy.done .check path { stroke-dashoffset: 0; transition-delay: .1s; }
 
 figure { display: grid; gap: 1rem; margin-block: 0; }
 .shot { border: 1px solid var(--surface); border-radius: var(--radius); }
@@ -182,6 +186,7 @@ footer a:hover { color: var(--fg); }
 }
 @media (prefers-reduced-motion: reduce) {
   [data-replay] { display: none; }   /* nothing to replay when nothing is typed */
+  .copy, .copy svg, .copy .check path { transition: none; }
 }
 </style>
 <noscript><style>.bar:has(.tabs), #copy, [data-replay] { display: none; }</style></noscript>
@@ -212,7 +217,7 @@ footer a:hover { color: var(--fg); }
       <code><span class="p" id="install-prompt">$ </span><span id="install-cmd">curl -fsSL https://raw.githubusercontent.com/RealDoc06/tg-cli/main/install.sh | bash</span></code>
       <button type="button" class="copy" id="copy" aria-label="Copy">
         <svg class="sheets" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>
-        <svg class="check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 9.5 17 19 7.5"/></svg>
+        <svg class="check" viewBox="0 0 24 24" aria-hidden="true"><path pathLength="1" d="M5 12.5 9.5 17 19 7.5"/></svg>
       </button>
     </div>
   </div>
