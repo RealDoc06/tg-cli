@@ -72,7 +72,7 @@ An agent with your session can write to anyone as you. Two limits keep that in c
 
 ```sh
 tg config                        # show the limits and where the file is
-tg config read-only on           # no sending, no marking as read, no new groups
+tg config read-only on           # no sending, editing, marking as read or new groups
 tg config allow "Dev Team" @bob  # from now on, write only to these chats
 tg config disallow @bob          # take one off the list (never the last one)
 tg config allow --any            # lift the list
@@ -128,7 +128,7 @@ Run `tg` with no arguments.
 | `esc` | Cancel the reply or the edit |
 | `q` `ctrl+c` | Quit |
 
-The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. New messages arrive live.
+The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages on several lines are edited elsewhere. New messages arrive live.
 
 ### Themes
 

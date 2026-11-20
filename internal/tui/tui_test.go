@@ -205,3 +205,30 @@ func TestCtrlArrowsPickTheReply(t *testing.T) {
 		t.Errorf("sent a reply to %d, want %d; reply left set to %d", sent.msg.ReplyTo, want, m.replyTo)
 	}
 }
+
+// The composer is one line. Editing must not join a message's lines, and an
+// edit must give back the draft it replaced.
+func TestEditKeepsLinesAndDraft(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	h := m.histories[m.openID]
+	h.msgs = append(h.msgs, core.Message{ID: 9999, ChatID: m.openID, Out: true, Date: time.Now(), Text: "line one\nline two"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.editing != 0 || m.status == "" {
+		t.Fatalf("a message on two lines was opened for editing: editing %d, status %q", m.editing, m.status)
+	}
+
+	h.msgs = h.msgs[:len(h.msgs)-1] // the newest own message is one line again
+	m.input.SetValue("half typed")
+	msg, _ := m.lastOwn()
+	m.edit(msg)
+	if m.input.Value() != msg.Text {
+		t.Fatalf("composer holds %q", m.input.Value())
+	}
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Error("an unchanged edit was sent")
+	}
+	if m.input.Value() != "half typed" {
+		t.Errorf("the draft became %q", m.input.Value())
+	}
+}

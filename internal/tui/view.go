@@ -385,7 +385,7 @@ func (m *model) statusLine() string {
 	case m.focus == focusInput && m.replyTo != 0:
 		hints = [][2]string{{"ctrl+↑↓", "pick"}, {"esc", "cancel"}}
 	case m.focus == focusInput:
-		hints = [][2]string{{"pgup/pgdn", "scroll"}, {"ctrl+↑↓", "reply"}, {"↑", "edit last"}, {"right click", "more"}, {"esc", "chats"}, {"ctrl+c", "quit"}}
+		hints = [][2]string{{"ctrl+↑↓", "reply"}, {"↑", "edit last"}, {"right click", "more"}, {"esc", "chats"}, {"pgup/pgdn", "scroll"}}
 	case m.focus == focusFilter:
 		hints = [][2]string{{"type", "to filter"}, {"enter", "open"}, {"esc", "clear"}}
 	}
@@ -401,9 +401,16 @@ func (m *model) statusLine() string {
 	if m.account != "" {
 		right = m.st.accent.Render(m.account) + "  " + right
 	}
+	// Hints come most useful first, and the ones that do not fit are left
+	// out whole rather than cut.
 	var help strings.Builder
+	room := m.width - ansi.StringWidth(right) - 2
 	for _, h := range hints {
-		help.WriteString(" " + m.st.key.Render(h[0]) + " " + m.st.dim.Render(h[1]) + " ")
+		hint := " " + m.st.key.Render(h[0]) + " " + m.st.dim.Render(h[1]) + " "
+		if room -= ansi.StringWidth(hint); room < 0 {
+			break
+		}
+		help.WriteString(hint)
 	}
 	return spread(help.String(), right+" ", m.width)
 }

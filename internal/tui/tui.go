@@ -70,7 +70,8 @@ type model struct {
 	// The composer replies to replyTo, or saves an edit of editing instead
 	// of sending. At most one is set, 0 means none.
 	replyTo, editing int
-	menu             *menu // the open context menu, nil when there is none
+	draft            string // what the composer held before an edit, put back after it
+	menu             *menu  // the open context menu, nil when there is none
 
 	// avatars maps chat ID to an uploaded image ID, 0 while it is loading.
 	avatars   map[int64]int
@@ -186,6 +187,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.menu = nil // it was placed for the old size
 		return m, m.afterMove()
 
 	case tea.KeyPressMsg:
@@ -285,6 +287,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case editedMsg:
 		if msg.err != nil {
 			m.status = "edit failed: " + msg.err.Error()
+			// Put the edit back so it is not lost, unless the composer has
+			// moved on to something else.
+			if msg.chatID == m.openID && m.replyTo == 0 && m.editing == 0 {
+				m.draft, m.editing = m.input.Value(), msg.id
+				m.input.SetValue(msg.text)
+			}
 			return m, nil
 		}
 		if h := m.histories[msg.chatID]; h != nil {
@@ -427,7 +435,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		case "esc":
 			if m.replyTo != 0 || m.editing != 0 {
 				m.cancelDraft()
-				return nil
+				return m.afterScroll()
 			}
 			return m.setFocus(focusChats)
 		case "tab":
@@ -443,10 +451,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 				}
 			}
 		case "pgup":
-			m.scroll += m.messageRows() / 2
+			m.scroll += max(1, m.messageRows()/2)
 			return m.afterScroll()
 		case "pgdown":
-			m.scroll -= m.messageRows() / 2
+			m.scroll -= max(1, m.messageRows()/2)
 			return m.afterScroll()
 		case "enter":
 			return m.submit()
@@ -468,7 +476,7 @@ func (m *model) submit() tea.Cmd {
 			return nil
 		}
 		m.cancelDraft()
-		if msg, ok := m.message(editing); ok && msg.Text == text {
+		if msg, ok := m.message(editing); ok && strings.TrimSpace(msg.Text) == text {
 			return nil
 		}
 		return func() tea.Msg {
@@ -497,6 +505,14 @@ func (m *model) reply(msg core.Message) tea.Cmd {
 }
 
 func (m *model) edit(msg core.Message) tea.Cmd {
+	// The composer is one line: loading the text would join its lines.
+	if strings.ContainsAny(msg.Text, "\n\t") {
+		m.status = "the composer holds one line, edit this message in another Telegram app"
+		return nil
+	}
+	if m.editing == 0 {
+		m.draft = m.input.Value()
+	}
 	m.replyTo, m.editing = 0, msg.ID
 	m.input.SetValue(msg.Text)
 	m.input.CursorEnd()
@@ -504,13 +520,14 @@ func (m *model) edit(msg core.Message) tea.Cmd {
 	return tea.Batch(m.setFocus(focusInput), m.afterScroll())
 }
 
-// cancelDraft drops the reply or the edit. The text of an edit goes with it,
-// a reply keeps what was typed.
+// cancelDraft drops the reply or the edit. A reply keeps what was typed, an
+// edit gives the composer back what it held before.
 func (m *model) cancelDraft() {
 	if m.editing != 0 {
-		m.input.Reset()
+		m.input.SetValue(m.draft)
+		m.input.CursorEnd()
 	}
-	m.replyTo, m.editing = 0, 0
+	m.replyTo, m.editing, m.draft = 0, 0, ""
 }
 
 // pickReply moves the reply to the message before (-1) or after (1) the one
@@ -537,11 +554,11 @@ func (m *model) pickReply(delta int) tea.Cmd {
 	return m.reply(msgs[i])
 }
 
-// lastOwn is the newest message the account sent in the open chat.
+// lastOwn is the newest message with text the account sent in the open chat.
 func (m *model) lastOwn() (core.Message, bool) {
 	if h := m.histories[m.openID]; h != nil {
 		for i := len(h.msgs) - 1; i >= 0; i-- {
-			if h.msgs[i].Out && !h.msgs[i].Service {
+			if editable(h.msgs[i]) {
 				return h.msgs[i], true
 			}
 		}
@@ -570,7 +587,7 @@ func (m *model) openMenu(x, y int) {
 	if !msg.Service {
 		items = append(items, menuItem{"Reply", (*model).reply})
 	}
-	if msg.Out && !msg.Service {
+	if editable(msg) {
 		items = append(items, menuItem{"Edit", (*model).edit})
 	}
 	if msg.Text != "" {
@@ -590,6 +607,10 @@ func (m *model) openMenu(x, y int) {
 	y = max(0, min(y, m.height-1-len(items)))
 	m.menu = &menu{msg: msg, items: items, x: x, y: y}
 }
+
+// editable reports whether the TUI offers to edit msg: the account sent it
+// and it has text. Media without a caption, like a sticker, has none.
+func editable(msg core.Message) bool { return msg.Out && !msg.Service && msg.Text != "" }
 
 func (m *model) runMenu() tea.Cmd {
 	menu := m.menu
@@ -700,7 +721,7 @@ func (m *model) openSelected() tea.Cmd {
 	}
 	chatID := chats[m.sel].ID
 	m.openID, m.scroll = chatID, 0
-	m.replyTo, m.editing = 0, 0
+	m.replyTo, m.editing, m.draft = 0, 0, ""
 	m.input.Reset()
 	cmds := []tea.Cmd{m.setFocus(focusInput)}
 	if h := m.histories[chatID]; h == nil {

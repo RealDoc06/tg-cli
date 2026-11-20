@@ -30,7 +30,7 @@ var interactive = func() bool {
 // run, including inside a terminal they drive (tmux, a pty).
 var agentVars = []string{
 	"AI_AGENT", "CLAUDECODE", "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED",
-	"CURSOR_AGENT", "GEMINI_CLI", "OPENCODE",
+	"CODEX_THREAD_ID", "CURSOR_AGENT", "GEMINI_CLI", "OPENCODE",
 }
 
 // agentEnv returns the first of agentVars that is set, "" when none is.
@@ -43,6 +43,15 @@ func agentEnv() string {
 	return ""
 }
 
+// agentNote names the variable that marks tg as run by an agent, for
+// refusals: a person who inherited it from an agent's shell sees why.
+func agentNote() string {
+	if name := agentEnv(); name != "" {
+		return " (" + name + " is set, so an agent runs this)"
+	}
+	return ""
+}
+
 // needPerson refuses to loosen guardrails, to log in or to remove an account
 // when tg is not run from a terminal, which is how agents normally run it.
 // Otherwise one told to by a message it read could lift its own restrictions
@@ -51,7 +60,7 @@ func needPerson(what string) error {
 	if interactive() {
 		return nil
 	}
-	return &core.RefusedError{Reason: what + " has to be done by a person at a terminal, it is not for agents. If you are one, ask your user"}
+	return &core.RefusedError{Reason: what + " has to be done by a person at a terminal, it is not for agents" + agentNote() + ". If you are one, ask your user"}
 }
 
 // loadPolicy reads the guardrails of an account from config.json.
