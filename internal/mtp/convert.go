@@ -20,6 +20,15 @@ func (b *backend) message(raw tg.MessageClass, e tg.Entities) (core.Message, boo
 			Edited: m.EditDate != 0 && !m.EditHide,
 		}
 		out.Media, out.Picture, out.PictureSize = mediaSummary(m.Media)
+		if markup, ok := m.ReplyMarkup.(*tg.ReplyInlineMarkup); ok {
+			for _, row := range markup.Rows {
+				buttons := make([]core.Button, len(row.Buttons))
+				for i, button := range row.Buttons {
+					buttons[i] = buttonOf(button)
+				}
+				out.Buttons = append(out.Buttons, buttons)
+			}
+		}
 		if reply, ok := m.ReplyTo.(*tg.MessageReplyHeader); ok && !reply.ForumTopic {
 			out.ReplyTo = reply.ReplyToMsgID
 		}
@@ -36,6 +45,23 @@ func (b *backend) message(raw tg.MessageClass, e tg.Entities) (core.Message, boo
 		return out, true
 	}
 	return core.Message{}, false
+}
+
+// buttonOf converts a button of an inline keyboard. A callback button that
+// asks for the account's password is left to Telegram's own apps.
+func buttonOf(button tg.KeyboardInlineButton) core.Button {
+	out := core.Button{Text: button.Text}
+	switch t := button.Type.(type) {
+	case *tg.InlineButtonTypeCallback:
+		if !t.RequiresPassword {
+			out.Kind, out.Value = core.ButtonCallback, string(t.Data)
+		}
+	case *tg.InlineButtonTypeURL:
+		out.Kind, out.Value = core.ButtonURL, t.URL
+	case *tg.InlineButtonTypeCopy:
+		out.Kind, out.Value = core.ButtonCopy, t.CopyText
+	}
+	return out
 }
 
 // author works out who wrote a message. Private chats and channel posts omit

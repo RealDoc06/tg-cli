@@ -78,6 +78,14 @@ func (g *guarded) Edit(ctx context.Context, chatID int64, msgID int, text string
 	return g.Backend.Edit(ctx, chatID, msgID, text)
 }
 
+// Press is checked like sending: the bot acts on it as on a message.
+func (g *guarded) Press(ctx context.Context, chatID int64, msgID int, data string) (BotAnswer, error) {
+	if err := g.check("pressing buttons", chatID); err != nil {
+		return BotAnswer{}, err
+	}
+	return g.Backend.Press(ctx, chatID, msgID, data)
+}
+
 func (g *guarded) MarkRead(ctx context.Context, chatID int64, maxID int) error {
 	if err := g.check("marking as read", chatID); err != nil {
 		return err

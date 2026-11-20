@@ -83,8 +83,12 @@ type File struct {
 	Theme string `json:"theme,omitempty"`
 	// SpacedMessages sets messages apart in the TUI's conversation, see
 	// `tg config spacing`. Off packs them together.
-	SpacedMessages bool                `json:"spaced_messages,omitempty"`
-	Accounts       map[string]*Account `json:"accounts,omitempty"`
+	SpacedMessages bool `json:"spaced_messages,omitempty"`
+	// Keys is how the TUI writes shortcuts: "mac" with ⌥ and ⌘, "pc" with
+	// alt+ and ctrl+. Empty follows the system tg runs on. The TUI's
+	// settings menu (esc) sets it.
+	Keys     string              `json:"keys,omitempty"`
+	Accounts map[string]*Account `json:"accounts,omitempty"`
 }
 
 // Account is one logged in Telegram account and its guardrails. Both

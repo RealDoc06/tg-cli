@@ -30,7 +30,7 @@ import (
 func loaded(t *testing.T, width, height int) *model {
 	t.Helper()
 	be := demo.New()
-	m := newModel(context.Background(), be, "")
+	m := newModel(context.Background(), be, Look{})
 	m.version = "test"
 	chats, err := be.Chats(m.ctx, core.ChatQuery{})
 	if err != nil {
@@ -79,16 +79,19 @@ func upload(m *model, cmd tea.Cmd) {
 func TestViewFillsTheTerminal(t *testing.T) {
 	for _, size := range [][2]int{{120, 30}, {80, 24}, {72, 10}, {50, 20}, {20, 6}} {
 		m := loaded(t, size[0], size[1])
-		for _, state := range []string{"list", "opened", "replying with a menu open"} {
+		for _, state := range []string{"list", "opened", "replying with a menu open", "settings"} {
 			switch state {
 			case "opened":
 				open(t, m, 1)
 			case "replying with a menu open":
 				m.pickReply(-1)
-				m.openMenu(m.width-1, m.height-5) // the newest message
+				m.openMenu(m.width-1, m.height-6) // the newest message
 				if m.menu == nil && size[1] >= 10 {
 					t.Errorf("%v: no menu opened on the newest message", size)
 				}
+			case "settings":
+				m.menu = nil
+				m.settings = &settingsMenu{}
 			}
 			rows := strings.Split(m.View().Content, "\n")
 			if len(rows) != size[1] {
@@ -828,7 +831,7 @@ func TestSpacingSetsMessagesApart(t *testing.T) {
 	if n := blanks(); n != 0 {
 		t.Errorf("packed by default, got %d blank lines", n)
 	}
-	m.spaced = true
+	m.look.Spaced = true
 	if blanks() == 0 {
 		t.Error("spacing on left no gap between messages")
 	}
@@ -978,5 +981,140 @@ func TestHiddenConversationKeepsItsPictures(t *testing.T) {
 	}
 	if reading() != before {
 		t.Error("the conversation moved while hidden")
+	}
+}
+
+// ctrl+c clears what is typed first, and quits only from an empty composer.
+func TestCtrlCClearsTheComposerFirst(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	m.input.SetValue("half a thought")
+	m.openMenu(m.width-1, screenRow(m, "backups finished")) // a menu open must not make it quit
+	if m.menu == nil {
+		t.Fatal("no menu opened")
+	}
+	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	if cmd := m.key(ctrlC); cmd != nil {
+		if _, quit := cmd().(tea.QuitMsg); quit {
+			t.Fatal("ctrl+c quit with text in the composer")
+		}
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("composer holds %q", m.input.Value())
+	}
+	if cmd := m.key(ctrlC); cmd == nil {
+		t.Fatal("ctrl+c did not quit from an empty composer")
+	} else if _, quit := cmd().(tea.QuitMsg); !quit {
+		t.Fatal("ctrl+c did not quit from an empty composer")
+	}
+}
+
+// A setting changes at once, and is saved as a value of its own: the other
+// settings in config.json stay as they are there.
+func TestSettingsShowAndSaveOneChange(t *testing.T) {
+	m := loaded(t, 120, 30)
+	var saved []func(*Look)
+	m.save = func(change func(*Look)) error { saved = append(saved, change); return nil }
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.settings == nil || screenRow(m, "Settings") < 0 {
+		t.Fatal("esc on the chat list did not open the settings")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // Theme
+	if m.look.Theme != "macchiato" || m.st.theme.Name != "macchiato" {
+		t.Fatalf("theme is %q, drawn with %q", m.look.Theme, m.st.theme.Name)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // Spacing
+	if !m.look.Spaced {
+		t.Fatal("spacing did not turn on")
+	}
+
+	file := Look{Theme: "latte", Keys: "mac"} // changed elsewhere meanwhile
+	for _, change := range saved {
+		change(&file)
+	}
+	if want := (Look{Theme: "macchiato", Spaced: true, Keys: "mac"}); file != want {
+		t.Fatalf("config.json holds %+v, want %+v", file, want)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.settings != nil {
+		t.Fatal("esc did not close the settings")
+	}
+}
+
+// A bot's inline keyboard is drawn under its message, as part of it.
+func TestBotButtonsAreDrawn(t *testing.T) {
+	for _, width := range []int{120, 72} {
+		m := loaded(t, width, 30)
+		open(t, m, slices.IndexFunc(m.visible(), func(c *core.Chat) bool { return c.Title == "BotFather" }))
+		row := screenRow(m, "@weather_d") // cut short in a narrow pane
+		if row < 0 || !strings.Contains(ansi.Strip(strings.Split(m.View().Content, "\n")[row]), "@build_d") {
+			t.Fatalf("width %d: the first row of buttons is not drawn on one line", width)
+		}
+		if screenRow(m, "Bot API docs") != row+2 {
+			t.Fatalf("width %d: the second row of buttons is not below the first", width)
+		}
+		if msg, ok := m.messageAt(row); !ok || len(msg.Buttons) == 0 {
+			t.Fatalf("width %d: the buttons do not belong to their message", width)
+		}
+	}
+	// A calendar row in a narrow pane keeps every date readable.
+	m := loaded(t, 72, 30)
+	days := []string{"24", "25", "26", "27", "28", "29", "✅ 30"}
+	var calendar []core.Button
+	for _, day := range days {
+		calendar = append(calendar, core.Button{Text: day})
+	}
+	row := ansi.Strip(m.buttonLines([][]core.Button{calendar}, 26)[0].text)
+	for _, day := range days {
+		if !strings.Contains(row, day) {
+			t.Fatalf("%s is cut from %q", day, row)
+		}
+	}
+}
+
+func TestMacKeysUseSymbols(t *testing.T) {
+	m := loaded(t, 120, 30)
+	m.look.Keys = "mac"
+	for key, want := range map[string]string{"cmd+v": "⌘V", "alt+↑↓": "⌥↑↓", "ctrl+c": "ctrl+c", "esc": "esc"} {
+		if got := m.keyName(key); got != want {
+			t.Errorf("%s is written %q, want %q", key, got, want)
+		}
+	}
+	m.look.Keys = "pc"
+	if got := m.keyName("ctrl+v"); got != "ctrl+v" {
+		t.Errorf("on a PC ctrl+v is written %q", got)
+	}
+}
+
+// A click on a bot's button presses it and shows the answer, or copies a link.
+func TestClickPressesBotButtons(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, slices.IndexFunc(m.visible(), func(c *core.Chat) bool { return c.Title == "BotFather" }))
+	click := func(label string) tea.Cmd {
+		t.Helper()
+		y := screenRow(m, label)
+		if y < 0 {
+			t.Fatalf("%s is not on screen", label)
+		}
+		row := ansi.Strip(strings.Split(m.View().Content, "\n")[y])
+		x := ansi.StringWidth(row[:strings.Index(row, label)])
+		return m.update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	}
+	m.update(click("@build_demo_bot")())
+	if m.note != "Editing @build_demo_bot" || m.status != "" {
+		t.Fatalf("note %q, status %q", m.note, m.status)
+	}
+	m.status = "this button only works in Telegram's own apps" // left by an earlier button
+	click("Bot API docs")
+	if m.note != "copied link https://core.telegram.org/bots/api" || m.status != "" {
+		t.Fatalf("a link button left the note %q under the status %q", m.note, m.status)
+	}
+	late := click("@weather_demo_bot")
+	click("Bot API docs")
+	m.update(late())
+	if m.note != "copied link https://core.telegram.org/bots/api" {
+		t.Fatalf("an answer to an earlier press replaced the note with %q", m.note)
 	}
 }

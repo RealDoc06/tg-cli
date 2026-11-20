@@ -58,6 +58,37 @@ type Message struct {
 	// PictureSize is the media's size in pixels, zero when unknown. The TUI
 	// sets room aside for the picture with it, so nothing moves when it loads.
 	PictureSize image.Point `json:"-"`
+	// Buttons are a bot's inline keyboard, row by row.
+	Buttons [][]Button `json:"-"`
+}
+
+// ButtonKind tells what pressing a button of a bot's keyboard does.
+type ButtonKind uint8
+
+const (
+	// ButtonOther only works in Telegram's own apps, like a game or a payment.
+	ButtonOther ButtonKind = iota
+	// ButtonCallback sends its Value to the bot, see Backend.Press.
+	ButtonCallback
+	// ButtonURL opens the link in its Value.
+	ButtonURL
+	// ButtonCopy copies its Value.
+	ButtonCopy
+)
+
+// Button is one button of a bot's inline keyboard.
+type Button struct {
+	Text  string
+	Kind  ButtonKind
+	Value string
+}
+
+// BotAnswer is what a bot replies to a pressed button: a notice to show and
+// a link to open. Either can be empty, a bot often answers by editing its
+// message instead.
+type BotAnswer struct {
+	Text string
+	URL  string
 }
 
 // MediaPhoto is the Media of a message that carries a photo.
@@ -172,6 +203,8 @@ type Backend interface {
 	// posts: front ends offer it only for messages the account sent.
 	Edit(ctx context.Context, chatID int64, msgID int, text string) error
 	MarkRead(ctx context.Context, chatID int64, maxID int) error
+	// Press presses a ButtonCallback of message msgID, data being its Value.
+	Press(ctx context.Context, chatID int64, msgID int, data string) (BotAnswer, error)
 	// CreateGroup makes a new group with only the account in it.
 	CreateGroup(ctx context.Context, title string) (Chat, error)
 	Search(ctx context.Context, q SearchQuery) ([]Message, error)

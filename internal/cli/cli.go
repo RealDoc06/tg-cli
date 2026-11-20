@@ -200,7 +200,20 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 			if len(cfg.Accounts) > 1 {
 				label = name
 			}
-			return tui.Run(ctx, be, a.version, label, tui.Look{Theme: cfg.Theme, Spaced: cfg.SpacedMessages})
+			look := func(f *config.File) tui.Look {
+				return tui.Look{Theme: f.Theme, Spaced: f.SpacedMessages, Keys: f.Keys}
+			}
+			// The settings menu saves one change at a time, over config.json
+			// as it is then.
+			save := func(change func(*tui.Look)) error {
+				return config.Update(func(f *config.File) error {
+					l := look(f)
+					change(&l)
+					f.Theme, f.SpacedMessages, f.Keys = l.Theme, l.Spaced, l.Keys
+					return nil
+				})
+			}
+			return tui.Run(ctx, be, a.version, label, look(cfg), save)
 		})
 	}
 
