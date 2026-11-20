@@ -129,7 +129,7 @@ Run `tg` with no arguments.
 | `ctrl+v` (`cmd+v` on a Mac) | Attach the image in the clipboard, the message becomes its caption |
 | `backspace` | Remove the attachment, when the message is empty |
 | `ctrl+c` | Clear the composer or cancel the edit, quit when it is empty |
-| `esc` | In the chat list, open the settings: theme, spacing, how shortcuts are written |
+| `esc` | In the chat list, open the settings: theme, spacing of messages and chats, how shortcuts are written |
 | `q` | Quit, from the chat list |
 
 The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages the composer cannot hold as they are (several lines, special characters) are edited elsewhere. New messages arrive live. What you type and leave unsent stays with its chat, shown in the list as a `[draft]`.

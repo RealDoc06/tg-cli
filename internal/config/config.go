@@ -87,8 +87,11 @@ type File struct {
 	// Keys is how the TUI writes shortcuts: "mac" with ⌥ and ⌘, "pc" with
 	// alt+ and ctrl+. Empty follows the system tg runs on. The TUI's
 	// settings menu (esc) sets it.
-	Keys     string              `json:"keys,omitempty"`
-	Accounts map[string]*Account `json:"accounts,omitempty"`
+	Keys string `json:"keys,omitempty"`
+	// PackedChats drops the blank row between chats in the TUI's chat list.
+	// The settings menu (esc) sets it.
+	PackedChats bool                `json:"packed_chats,omitempty"`
+	Accounts    map[string]*Account `json:"accounts,omitempty"`
 }
 
 // Account is one logged in Telegram account and its guardrails. Both

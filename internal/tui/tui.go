@@ -252,6 +252,8 @@ type Look struct {
 	Theme  string // one of Themes, "" for the default
 	Spaced bool   // a gap between messages of different senders or moments
 	Keys   string // "mac" or "pc" shortcut labels, "" for the system's
+	// PackedChats drops the blank row between chats in the list.
+	PackedChats bool
 }
 
 // Run starts the TUI and blocks until the user quits. account, when not
@@ -384,7 +386,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		if m.settings != nil {
 			// A click on a setting changes it, anywhere else closes the menu.
 			x, y, w := m.settingsBox()
-			if i := msg.Y - y - 1; msg.Button == tea.MouseLeft && i >= 0 && i < len(settingsItems) && msg.X >= x && msg.X < x+w {
+			if i := msg.Y - y - settingsTop; msg.Button == tea.MouseLeft && i >= 0 && i < len(settingsItems) && msg.X >= x && msg.X < x+w {
 				m.settings.sel = i
 				return m.changeSetting(1)
 			}
@@ -420,7 +422,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 			return m.setFocus(focusInput)
 		}
-		if k := (msg.Y - 1) / chatStride; (msg.Y-1)%chatStride < 2 && k < m.chatsDrawn() && m.top+k < len(m.visible()) {
+		if k := (msg.Y - 1) / m.chatStride(); (msg.Y-1)%m.chatStride() < 2 && k < m.chatsDrawn() && m.top+k < len(m.visible()) {
 			m.sel = m.top + k
 			return m.openSelected()
 		}

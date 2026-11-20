@@ -800,7 +800,7 @@ func TestClickOpensTheChatUnderIt(t *testing.T) {
 	}
 	// Below the last chat drawn, where the next one would go if it fit.
 	if rows := m.listRows(); len(m.visible()) > rows {
-		m.Update(tea.MouseClickMsg{X: 10, Y: 1 + chatStride*rows, Button: tea.MouseLeft})
+		m.Update(tea.MouseClickMsg{X: 10, Y: 1 + m.chatStride()*rows, Button: tea.MouseLeft})
 		if m.openID != 0 {
 			t.Fatalf("a click below the list opened chat %d, which is not drawn", m.openID)
 		}
@@ -1025,16 +1025,22 @@ func TestSettingsShowAndSaveOneChange(t *testing.T) {
 		t.Fatalf("theme is %q, drawn with %q", m.look.Theme, m.st.theme.Name)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // Spacing
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // Message spacing
 	if !m.look.Spaced {
-		t.Fatal("spacing did not turn on")
+		t.Fatal("message spacing did not turn on")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	stride := screenRow(m, m.visible()[1].Title) - screenRow(m, m.visible()[0].Title)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // Chat spacing
+	if packed := screenRow(m, m.visible()[1].Title) - screenRow(m, m.visible()[0].Title); packed != stride-1 {
+		t.Fatalf("chats are %d rows apart, %d before chat spacing turned off", packed, stride)
 	}
 
 	file := Look{Theme: "latte", Keys: "mac"} // changed elsewhere meanwhile
 	for _, change := range saved {
 		change(&file)
 	}
-	if want := (Look{Theme: "macchiato", Spaced: true, Keys: "mac"}); file != want {
+	if want := (Look{Theme: "macchiato", Spaced: true, Keys: "mac", PackedChats: true}); file != want {
 		t.Fatalf("config.json holds %+v, want %+v", file, want)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
