@@ -330,3 +330,29 @@ func TestSaveBlocksOnlyItsChat(t *testing.T) {
 		t.Error("enter still waits after the save is done")
 	}
 }
+
+// A save's result must not overwrite a newer edit made in another app that
+// arrived first, and a message that got shorter must not leave the scrolled
+// pane blank.
+func TestSaveResultKeepsNewerEdit(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	own, _ := m.lastOwn()
+	m.edit(own)
+	m.input.SetValue("from tg")
+	_, save := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	result := save()
+
+	newer := own
+	newer.Text, newer.Edited = "from the phone", true
+	m.Update(eventMsg(core.Event{Kind: core.EventEdit, Chat: *m.chat(m.openID), Message: newer}))
+	m.Update(result)
+	if got, _ := m.message(own.ID); got.Text != "from the phone" {
+		t.Errorf("message says %q, want the newer edit", got.Text)
+	}
+
+	m.scroll = 1000 // far above what is loaded, as after a long message shrank
+	if screenRow(m, "from the phone") < 0 {
+		t.Error("the conversation is blank")
+	}
+}

@@ -50,7 +50,9 @@ func (m *model) messageRows() int { return max(1, m.height-1-messagesTop-m.draft
 // a tiny terminal cuts off.
 func (m *model) shown(n int) (start, end, pad, overflow int) {
 	view := m.messageRows()
-	end = max(0, n-m.scroll)
+	// Clamped here as well: a message that got shorter while the pane was
+	// scrolled must not leave it blank.
+	end = max(0, n-min(m.scroll, max(0, n-view)))
 	start = max(0, end-view)
 	overflow = max(0, messagesTop+view+m.draftRows()+2-(m.height-1))
 	return start, end, view - (end - start), overflow

@@ -119,10 +119,10 @@ type (
 		err error
 	}
 	editedMsg struct {
-		chatID int64
-		id     int
-		text   string
-		err    error
+		chatID     int64
+		id         int
+		from, text string // the text as the edit was sent, and the new one
+		err        error
 	}
 	avatarMsg struct {
 		chatID int64
@@ -317,17 +317,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.afterScroll()
 		}
+		// Apply the edit where the message still holds the text it replaced:
+		// a newer edit from another app may have arrived first.
 		if h := m.histories[msg.chatID]; h != nil {
-			if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.id }); i >= 0 {
+			if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.id }); i >= 0 && h.msgs[i].Text == msg.from {
 				h.msgs[i].Text, h.msgs[i].Edited = msg.text, true
 			}
 		}
-		if c := m.chat(msg.chatID); c != nil && c.Last != nil && c.Last.ID == msg.id {
+		if c := m.chat(msg.chatID); c != nil && c.Last != nil && c.Last.ID == msg.id && c.Last.Text == msg.from {
 			last := *c.Last
 			last.Text, last.Edited = msg.text, true
 			c.Last = &last
 		}
-		return m, m.afterScroll() // a shorter text has fewer lines
+		if msg.chatID == m.openID {
+			return m, m.afterScroll() // a shorter text has fewer lines
+		}
+		return m, nil
 
 	case eventMsg:
 		ev := core.Event(msg)
@@ -335,8 +340,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.addMessage(ev.Message, &ev.Chat, ev.Kind == core.EventEdit)
-		// An edit can change how many lines a message takes.
-		cmds := []tea.Cmd{m.afterMove(), m.afterScroll()}
+		cmds := []tea.Cmd{m.afterMove()}
+		if ev.Kind == core.EventEdit && ev.Message.ChatID == m.openID {
+			cmds = append(cmds, m.afterScroll()) // the edit can change its line count
+		}
 		if ev.Message.ChatID == m.openID && !ev.Message.Out {
 			cmds = append(cmds, m.markRead(m.openID))
 		}
@@ -510,10 +517,14 @@ func (m *model) submit() tea.Cmd {
 			m.cancelDraft()
 			return nil
 		}
+		// What the message says now, which the result replaces only if no
+		// newer edit arrives first.
+		current, _ := m.message(editing)
+		from := current.Text
 		m.saving[chatID]++
 		m.cancelDraft()
 		return func() tea.Msg {
-			return editedMsg{chatID, editing, text, m.be.Edit(m.ctx, chatID, editing, text)}
+			return editedMsg{chatID, editing, from, text, m.be.Edit(m.ctx, chatID, editing, text)}
 		}
 	}
 	if text == "" {
@@ -760,6 +771,9 @@ func (m *model) afterScroll() tea.Cmd {
 		return nil
 	}
 	_, rw := m.layout()
+	if rw == 0 {
+		return nil // the conversation is hidden, its width unknown
+	}
 	lines, _ := m.messageLines(h, rw)
 	limit := max(0, len(lines)-m.messageRows())
 	m.scroll = max(0, min(m.scroll, limit))
