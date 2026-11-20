@@ -235,7 +235,13 @@ func (b *Backend) Edit(_ context.Context, chatID int64, msgID int, text string) 
 	case !msgs[i].Out:
 		return fmt.Errorf("message %d was not sent by this account, only your own messages can be edited", msgID)
 	}
+	// Edit a copy: chat previews handed out earlier point into the old one.
+	msgs = slices.Clone(msgs)
 	msgs[i].Text, msgs[i].Edited = text, true
+	b.messages[chatID] = msgs
+	if chat, ok := b.chat(chatID); ok && chat.Last != nil && chat.Last.ID == msgID {
+		chat.Last = &msgs[i]
+	}
 	return nil
 }
 

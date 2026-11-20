@@ -71,7 +71,7 @@ type model struct {
 	// of sending. At most one is set, 0 means none.
 	replyTo, editing int
 	editFrom         string // the text the edit started from
-	saving           int    // the message whose edit is being saved, 0 for none
+	savingIn         int64  // the chat an edit is being saved in, 0 for none
 	stash            *stash // the composer as it was before an edit, nil for none
 	menu             *menu  // the open context menu, nil when there is none
 
@@ -294,12 +294,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case editedMsg:
-		m.saving = 0
+		if msg.chatID == m.savingIn {
+			m.savingIn = 0
+		}
+		if m.status == savingNote {
+			m.status = ""
+		}
 		if msg.err != nil {
 			m.status = "edit failed: " + msg.err.Error()
 			// Put the edit back so it is not lost, over what the composer
-			// holds now, unless another chat is open or another edit started.
-			if original, ok := m.message(msg.id); ok && msg.chatID == m.openID && m.editing == 0 {
+			// holds now, unless another chat is open. No edit can be under
+			// way in this chat: they wait for the save.
+			if original, ok := m.message(msg.id); ok && msg.chatID == m.openID {
+				if m.input.Value() != "" {
+					m.status += ", esc gives back what you were typing"
+				}
 				m.stash = &stash{m.input.Value(), m.replyTo}
 				m.replyTo, m.editing, m.editFrom = 0, msg.id, original.Text
 				m.input.SetValue(msg.text)
@@ -477,12 +486,15 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 }
 
+// savingNote asks to wait while an edit is saved in the open chat.
+const savingNote = "saving the edit, a moment"
+
 // submit sends what is in the composer, as a reply when one is picked, or
 // saves it as the new text of the message being edited.
 func (m *model) submit() tea.Cmd {
-	if m.saving != 0 {
+	if m.savingIn != 0 && m.savingIn == m.openID {
 		// Wait, so a second enter does not send the draft put back.
-		m.status = "saving the edit, a moment"
+		m.status = savingNote
 		return nil
 	}
 	text := strings.TrimSpace(m.input.Value())
@@ -496,7 +508,7 @@ func (m *model) submit() tea.Cmd {
 			m.cancelDraft()
 			return nil
 		}
-		m.saving = editing
+		m.savingIn = chatID
 		m.cancelDraft()
 		return func() tea.Msg {
 			return editedMsg{chatID, editing, text, m.be.Edit(m.ctx, chatID, editing, text)}
@@ -528,9 +540,11 @@ func (m *model) edit(msg core.Message) tea.Cmd {
 	case multiline(msg.Text):
 		m.status = "the composer holds one line, edit this message in another Telegram app"
 		return nil
-	case m.saving != 0:
-		m.status = "saving the edit, a moment"
+	case m.savingIn != 0 && m.savingIn == m.openID:
+		m.status = savingNote
 		return nil
+	case m.editing == msg.ID:
+		return m.setFocus(focusInput) // keep the changes made so far
 	}
 	if m.editing == 0 && m.stash == nil {
 		m.stash = &stash{m.input.Value(), m.replyTo}
@@ -650,10 +664,16 @@ func editable(msg core.Message) bool { return msg.Out && !msg.Service && msg.Tex
 // turns into spaces: loading it for an edit would change it.
 func multiline(text string) bool { return strings.ContainsAny(text, "\n\r\t") }
 
+// runMenu runs the selected item on the message as it is now: it may have
+// been edited since the menu opened.
 func (m *model) runMenu() tea.Cmd {
 	menu := m.menu
 	m.menu = nil
-	return menu.items[menu.sel].run(m, menu.msg)
+	msg := menu.msg
+	if current, ok := m.message(msg.ID); ok {
+		msg = current
+	}
+	return menu.items[menu.sel].run(m, msg)
 }
 
 // copy puts s on the clipboard with OSC 52, which also works over SSH.
