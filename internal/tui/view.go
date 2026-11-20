@@ -28,8 +28,12 @@ func (m *model) layout() (left, right int) {
 	return left, m.width - left - 1
 }
 
+// A chat takes two rows in the list, and a blank one sets it apart from the
+// next: chat k starts on row 1+chatStride*k, below the list's title.
+const chatStride = 3
+
 // listRows is how many chats fit in the list.
-func (m *model) listRows() int { return max(1, (m.height-2)/2) }
+func (m *model) listRows() int { return max(1, (m.height-1)/chatStride) }
 
 // The conversation pane is, top to bottom: the title and a gap, the messages,
 // a gap, the reply or edit being written when there is one, and the composer.
@@ -186,7 +190,14 @@ func (m *model) chatList(w, h int) []string {
 		}
 		rows = append(rows, fit(" "+m.st.muted.Render(hint), w))
 	}
-	for i := m.top; i < len(chats) && len(rows)+1 < h; i++ {
+	for i := m.top; i < len(chats); i++ {
+		gap := min(i-m.top, 1) // none above the first
+		if len(rows)+gap+2 > h {
+			break
+		}
+		if gap > 0 {
+			rows = append(rows, strings.Repeat(" ", w))
+		}
 		rows = append(rows, m.chatRow(chats[i], i == m.sel, w)...)
 	}
 	for len(rows) < h {
@@ -313,10 +324,14 @@ func (m *model) draftLine(w int) string {
 	return fit(" "+m.st.accent.Render("▌"+label)+"  "+m.st.muted.Render(strings.Join(strings.Fields(msg.Preview()), " ")), w)
 }
 
+// groupGap is how far apart two messages of one sender can be and still be
+// drawn together.
+const groupGap = 5 * time.Minute
+
 // messageLines lays the history out for a pane of width w: a date line per
-// day, then "HH:MM Name: text" wrapped with a hanging indent, with a gap
-// between messages. Agents sharing an account all send as "You", so the gap
-// cannot follow the sender. ids holds the message ID of each line, 0 for
+// day, then "HH:MM Name: text" wrapped with a hanging indent. Messages from
+// one sender close in time stay together, a gap sets the others apart.
+// ids holds the message ID of each line, 0 for
 // dates and gaps. The message being replied to or edited is marked.
 func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 	const indent = 7 // " HH:MM "
@@ -335,7 +350,8 @@ func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 			}
 			day = d
 			add(0, center(m.st.muted.Render(d), w))
-		} else {
+		} else if prev := h.msgs[i-1]; prev.Out != msg.Out || prev.FromID != msg.FromID ||
+			prev.Service != msg.Service || msg.Date.Sub(prev.Date) > groupGap {
 			add(0, "")
 		}
 

@@ -355,3 +355,19 @@ func TestShrunkContentStaysOnScreen(t *testing.T) {
 		t.Error("the conversation is blank")
 	}
 }
+
+// A click on a chat's rows opens that chat, a click on the gap between two
+// chats opens neither.
+func TestClickOpensTheChatUnderIt(t *testing.T) {
+	m := loaded(t, 120, 30)
+	second := m.visible()[1]
+	y := screenRow(m, second.Title)
+	m.Update(tea.MouseClickMsg{X: 10, Y: y + 2, Button: tea.MouseLeft}) // the gap below it
+	if m.openID != 0 {
+		t.Fatalf("a click on the gap opened chat %d", m.openID)
+	}
+	m.Update(tea.MouseClickMsg{X: 10, Y: y + 1, Button: tea.MouseLeft})
+	if m.openID != second.ID {
+		t.Errorf("opened chat %d, want %q", m.openID, second.Title)
+	}
+}

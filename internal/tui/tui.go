@@ -244,7 +244,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.X >= lw {
 			return m, m.setFocus(focusInput)
 		}
-		if i := m.top + (msg.Y-1)/2; i < len(m.visible()) {
+		if i := m.top + (msg.Y-1)/chatStride; (msg.Y-1)%chatStride < 2 && i < len(m.visible()) {
 			m.sel = i
 			return m, m.openSelected()
 		}
