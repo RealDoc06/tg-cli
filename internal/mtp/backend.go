@@ -652,9 +652,7 @@ func (b *backend) emitRead(chatID int64, maxID int) {
 	if fn == nil {
 		return
 	}
-	chat, _ := b.peers.chat(chatID)
-	chat.ID, chat.ReadOutbox = chatID, maxID
-	(*fn)(core.Event{Kind: core.EventRead, Chat: chat})
+	(*fn)(core.Event{Kind: core.EventRead, Chat: core.Chat{ID: chatID, ReadOutbox: maxID}})
 }
 
 func newSender(api *tg.Client) *message.Sender {

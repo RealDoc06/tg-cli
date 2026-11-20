@@ -1125,20 +1125,25 @@ func TestClickPressesBotButtons(t *testing.T) {
 	}
 }
 
-// A message of the account shows one check until the other side reads it.
-func TestReadReceiptTurnsIntoTwoChecks(t *testing.T) {
+// A message of the account shows a muted check until the other side reads
+// it, then a colored one.
+func TestReadReceiptColorsTheCheck(t *testing.T) {
 	m := loaded(t, 100, 30)
 	open(t, m, slices.IndexFunc(m.visible(), func(c *core.Chat) bool { return c.Title == "Dmitri Volkov" }))
+	sent, read := m.st.muted.Render("✓")+" ", m.st.accent.Render("✓")+" "
+	if sent == read {
+		t.Fatal("sent and read checks look the same")
+	}
 	last := func() string {
 		lines := m.messageLines(m.histories[m.openID], m.conversationWidth())
-		return ansi.Strip(lines[len(lines)-1].text)
+		return lines[len(lines)-1].text
 	}
-	if got := last(); !strings.HasSuffix(got, " ✓ ") {
-		t.Fatalf("unread message %q, want one check", got)
+	if got := last(); !strings.HasSuffix(got, sent) {
+		t.Fatalf("unread message %q, want a muted check", got)
 	}
 	h := m.histories[m.openID]
 	m.Update(eventMsg(core.Event{Kind: core.EventRead, Chat: core.Chat{ID: m.openID, ReadOutbox: h.msgs[len(h.msgs)-1].ID}}))
-	if got := last(); !strings.HasSuffix(got, " ✓✓ ") {
-		t.Fatalf("read message %q, want two checks", got)
+	if got := last(); !strings.HasSuffix(got, read) {
+		t.Fatalf("read message %q, want a colored check", got)
 	}
 }

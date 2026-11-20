@@ -431,8 +431,8 @@ type key struct {
 // below when it is loaded. Spaced, a gap sets apart a new sender or a pause,
 // and each day; otherwise messages are packed. Gaps and dates belong to no
 // message. The message being replied to or edited is marked. Messages of the
-// account end with a check, two once read, except where nobody reads them:
-// channels and Saved Messages.
+// account end with a check, colored once read, except where nobody reads
+// them: channels and Saved Messages.
 func (m *model) messageLines(h *history, w int) []msgLine {
 	const indent = photoIndent
 	pad := strings.Repeat(" ", indent)
@@ -496,18 +496,18 @@ func (m *model) messageLines(h *history, w int) []msgLine {
 			text += m.st.muted.Render(" (edited)")
 		}
 
-		// The check sits at the right edge of the last line, in room the
-		// text leaves for it.
+		// The check sits at the right edge of the last line. The text of
+		// the message wraps narrower to keep room for it.
 		var check string
 		if receipts && msg.Out && !msg.Service {
 			check = m.st.muted.Render("✓") + " "
 			if msg.ID <= chat.ReadOutbox {
-				check = m.st.accent.Render("✓✓") + " "
+				check = m.st.accent.Render("✓") + " "
 			}
 		}
 		wrap := w - indent - 1
 		if check != "" {
-			wrap -= 4 // " ✓✓ "
+			wrap -= 3 // " ✓ "
 		}
 		wrapped := strings.Split(ansi.Wrap(text, max(10, wrap), ""), "\n")
 		for j, l := range wrapped {

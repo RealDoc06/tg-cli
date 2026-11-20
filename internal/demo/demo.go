@@ -253,8 +253,8 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 		time.AfterFunc(time.Second, func() {
 			b.mu.Lock()
 			b.messages[chatID] = append(b.messages[chatID], reply)
-			chat, _ := b.chat(chatID) // b.chats may have moved since
-			chat.ReadOutbox = m.ID    // read before answering
+			chat, _ := b.chat(chatID)                    // b.chats may have moved since
+			chat.ReadOutbox = max(chat.ReadOutbox, m.ID) // read before answering
 			read := core.Event{Kind: core.EventRead, Chat: *chat}
 			ev := core.Event{Kind: core.EventMessage, Chat: *chat, Message: reply}
 			b.mu.Unlock()

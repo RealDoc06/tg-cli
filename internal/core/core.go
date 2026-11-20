@@ -179,7 +179,7 @@ const (
 	// from then on is reported. It carries no chat or message.
 	EventReady EventKind = "ready"
 	// EventRead tells that the other side read the account's messages up to
-	// Chat.ReadOutbox. It carries no message.
+	// Chat.ReadOutbox. Only the chat's ID is set, and no message.
 	EventRead EventKind = "read"
 )
 
