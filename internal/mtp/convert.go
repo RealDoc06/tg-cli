@@ -75,7 +75,7 @@ func mediaSummary(media tg.MessageMediaClass) string {
 	case nil, *tg.MessageMediaEmpty, *tg.MessageMediaWebPage:
 		return ""
 	case *tg.MessageMediaPhoto:
-		return "photo"
+		return core.MediaPhoto
 	case *tg.MessageMediaDocument:
 		doc, ok := m.Document.(*tg.Document)
 		if !ok {

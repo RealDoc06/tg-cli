@@ -8,15 +8,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	textclip "github.com/atotto/clipboard"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/RealDoc06/tg-cli/internal/clipboard"
 	"github.com/RealDoc06/tg-cli/internal/core"
 	"github.com/RealDoc06/tg-cli/internal/termimg"
 )
@@ -28,6 +34,8 @@ const (
 	avatarCols  = 4
 	avatarRows  = 2
 	avatarPx    = 96
+	photoCols   = 36 // largest photo in a conversation, in cells
+	photoRows   = 14
 	narrowWidth = 70 // below this only one pane is shown at a time
 )
 
@@ -52,9 +60,10 @@ type model struct {
 	be      core.Backend
 	version string
 	account string // shown in the status line when not empty
-	images  bool
-	st      styles
-	spaced  bool // gaps between messages, see Look
+	// graphics is set when the terminal can draw pictures.
+	graphics bool
+	st       styles
+	spaced   bool // gaps between messages, see Look
 
 	width, height int
 	focus         focus
@@ -70,6 +79,19 @@ type model struct {
 
 	input  textinput.Model
 	filter textinput.Model
+	// attach is the picture or file pasted into the composer, sent with the
+	// next message. Its Text is unused. Change it with setAttach.
+	attach core.SendRequest
+	// attachSeq counts changes to attach. A clipboard read started before
+	// the latest one is stale: the user moved on.
+	attachSeq int
+	// pasting is the attachSeq of the clipboard read in progress. While it
+	// is current, enter waits: it would send what the read is replacing.
+	pasting int
+	// termClip is set when the terminal reports pastes with their clipboard
+	// (OSC 5522), reply is the answer it is sending.
+	termClip bool
+	reply    *termReply
 	// The composer replies to replyTo, or saves an edit of editing instead
 	// of sending. At most one is set, 0 means none.
 	replyTo, editing int
@@ -78,8 +100,9 @@ type model struct {
 	stash            *stash        // the composer as it was before an edit, nil for none
 	menu             *menu         // the open context menu, nil when there is none
 
-	// avatars maps chat ID to an uploaded image ID, 0 while it is loading.
-	avatars   map[int64]int
+	// images holds the pictures uploaded to the terminal. An entry with ID
+	// 0 is loading, or failed and shows as text.
+	images    map[imageKey]shown
 	lastImage int
 
 	status string // an error, shown instead of the hints
@@ -106,6 +129,17 @@ type menuItem struct {
 	run   func(m *model, msg core.Message) tea.Cmd
 }
 
+// imageKey names a picture: the photo of a message, or the avatar of a chat
+// when msg is 0.
+type imageKey struct {
+	chat int64
+	msg  int
+}
+
+// shown is a picture uploaded to the terminal as image id, drawn over a
+// cols x rows cell area.
+type shown struct{ id, cols, rows int }
+
 type (
 	chatsMsg struct {
 		chats []core.Chat
@@ -117,19 +151,39 @@ type (
 		older  bool
 		err    error
 	}
+	// sentMsg reports a send. seq is attachSeq once the composer was
+	// cleared for it.
 	sentMsg struct {
+		seq int
+		req core.SendRequest
 		msg core.Message
 		err error
+	}
+	// imageMsg carries a picture ready to upload, png is nil when it could
+	// not be loaded.
+	imageMsg struct {
+		key        imageKey
+		png        []byte
+		cols, rows int
+	}
+	// uploadedMsg follows the upload of a picture to the terminal.
+	uploadedMsg struct {
+		key imageKey
+		img shown
+	}
+	// clipboardMsg carries what the system clipboard held: an image, or
+	// text when it had none. seq is attachSeq when the read started.
+	clipboardMsg struct {
+		seq  int
+		png  []byte
+		text string
+		err  error
 	}
 	editedMsg struct {
 		chatID int64
 		id     int
 		text   string
 		err    error
-	}
-	avatarMsg struct {
-		chatID int64
-		png    []byte
 	}
 	errMsg   struct{ err error }
 	eventMsg core.Event
@@ -149,7 +203,7 @@ func Run(ctx context.Context, be core.Backend, version, account string, look Loo
 
 	m := newModel(ctx, be, look.Theme)
 	m.spaced = look.Spaced
-	m.version, m.account, m.images = version, account, termimg.Supported()
+	m.version, m.account, m.graphics = version, account, termimg.Supported()
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	go func() {
 		if err := be.Watch(ctx, func(ev core.Event) { p.Send(eventMsg(ev)) }); err != nil && ctx.Err() == nil {
@@ -157,10 +211,11 @@ func Run(ctx context.Context, be core.Backend, version, account string, look Loo
 		}
 	}()
 	_, err := p.Run()
+	fmt.Fprint(os.Stdout, clipboard.PasteEventsOff)
 
 	if ids := slices.Collect(func(yield func(int) bool) {
-		for _, id := range m.avatars {
-			if id != 0 && !yield(id) {
+		for _, img := range m.images {
+			if img.id != 0 && !yield(img.id) {
 				return
 			}
 		}
@@ -177,7 +232,7 @@ func Run(ctx context.Context, be core.Backend, version, account string, look Loo
 // is not a theme falls back to the default and says so.
 func newModel(ctx context.Context, be core.Backend, theme string) *model {
 	t, ok := FindTheme(theme)
-	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, avatars: map[int64]int{}, saving: map[int64]int{}}
+	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}, saving: map[int64]int{}}
 	if !ok {
 		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", theme, strings.Join(ThemeNames(), ", "))
 	}
@@ -204,18 +259,28 @@ func (m *model) newInput(prompt string) textinput.Model {
 // image store per screen: a picture sent before the switch, like an initials
 // badge that is ready at once, would never show.
 func (m *model) Init() tea.Cmd {
-	return tea.Sequence(tea.Raw(ansi.SetModeAltScreenSaveCursor), m.loadChats(nil))
+	return tea.Sequence(
+		tea.Raw(ansi.SetModeAltScreenSaveCursor),
+		tea.Batch(m.loadChats(nil), tea.Raw(clipboard.PasteEventsOn)),
+	)
 }
 
+// Update handles a message, then fetches the photos that came into view,
+// whatever moved them there.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	cmd := m.update(msg)
+	return m, tea.Batch(cmd, m.loadPhotos())
+}
+
+func (m *model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.menu = nil // it was placed for the old size
-		return m, tea.Batch(m.afterMove(), m.afterScroll())
+		return tea.Batch(m.afterMove(), m.afterScroll())
 
 	case tea.KeyPressMsg:
-		return m, m.key(msg)
+		return m.key(msg)
 
 	case tea.MouseWheelMsg:
 		m.menu = nil
@@ -225,10 +290,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if lw, _ := m.layout(); msg.X < lw {
 			m.sel += delta
-			return m, m.afterMove()
+			return m.afterMove()
 		}
 		m.scroll -= delta * 3
-		return m, m.afterScroll()
+		return m.afterScroll()
 
 	case tea.MouseClickMsg:
 		lw, _ := m.layout()
@@ -236,38 +301,38 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if i := msg.Y - m.menu.y; msg.Button == tea.MouseLeft && i >= 0 && i < len(m.menu.items) &&
 				msg.X >= m.menu.x && msg.X < m.menu.x+menuWidth(m.menu.items) {
 				m.menu.sel = i
-				return m, m.runMenu()
+				return m.runMenu()
 			}
 			m.menu = nil // a click elsewhere closes it, a right click opens another
 			if msg.Button != tea.MouseRight {
-				return m, nil
+				return nil
 			}
 		}
 		if msg.Y < 1 || msg.Y >= m.height-1 {
-			return m, nil
+			return nil
 		}
 		if msg.Button == tea.MouseRight {
 			if msg.X >= lw {
 				m.openMenu(msg.X, msg.Y)
 			}
-			return m, nil
+			return nil
 		}
 		if msg.Button != tea.MouseLeft {
-			return m, nil
+			return nil
 		}
 		if msg.X >= lw {
-			return m, m.setFocus(focusInput)
+			return m.setFocus(focusInput)
 		}
 		if k := (msg.Y - 1) / chatStride; (msg.Y-1)%chatStride < 2 && k < m.chatsDrawn() && m.top+k < len(m.visible()) {
 			m.sel = m.top + k
-			return m, m.openSelected()
+			return m.openSelected()
 		}
-		return m, nil
+		return nil
 
 	case chatsMsg:
 		if msg.err != nil {
 			m.status = msg.err.Error()
-			return m, nil
+			return nil
 		}
 		before := len(m.chats)
 		for _, c := range msg.chats {
@@ -280,33 +345,43 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.chatsDone {
 			cmds = append(cmds, m.loadChats(&m.chats[len(m.chats)-1]))
 		}
-		return m, tea.Batch(cmds...)
+		return tea.Batch(cmds...)
 
 	case historyMsg:
 		h := m.histories[msg.chatID]
 		h.loading = false
 		if msg.err != nil {
 			m.status = msg.err.Error()
-			return m, nil
+			return nil
 		}
 		h.loaded = true
 		if msg.older {
 			h.done = len(msg.msgs) < historyPage
 			h.msgs = append(msg.msgs, h.msgs...)
-			return m, nil
+			return nil
 		}
 		h.done = len(msg.msgs) < historyPage
 		h.msgs = msg.msgs
-		return m, m.markRead(msg.chatID)
+		return m.markRead(msg.chatID)
 
 	case sentMsg:
 		if msg.err != nil {
 			m.status = "send failed: " + msg.err.Error()
-			return m, nil
+			// Give the message back, so it is not lost, unless the chat
+			// changed or something else was written or pasted since.
+			if msg.seq == m.attachSeq && m.input.Value() == "" && m.replyTo == 0 && m.editing == 0 {
+				m.input.SetValue(msg.req.Text)
+				m.replyTo = msg.req.ReplyTo
+				if msg.req.File != "" || msg.req.Photo != nil {
+					msg.req.Text = ""
+					m.setAttach(msg.req)
+				}
+			}
+			return nil
 		}
 		m.addMessage(msg.msg, nil, false)
 		m.scroll = 0
-		return m, nil
+		return nil
 
 	case editedMsg:
 		if m.saving[msg.chatID]--; m.saving[msg.chatID] <= 0 {
@@ -329,9 +404,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.SetValue(msg.text)
 				m.input.CursorEnd()
 				m.revealMessage(msg.id)
-				return m, m.afterScroll()
+				return m.afterScroll()
 			}
-			return m, nil
+			return nil
 		}
 		// Show the saved text at once. The live updates stay authoritative:
 		// they carry this edit and any later one in the order Telegram
@@ -347,14 +422,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c.Last = &last
 		}
 		if msg.chatID == m.openID {
-			return m, m.afterScroll() // a shorter text has fewer lines
+			return m.afterScroll() // a shorter text has fewer lines
 		}
-		return m, nil
+		return nil
 
 	case eventMsg:
 		ev := core.Event(msg)
 		if ev.Kind == core.EventReady {
-			return m, nil
+			return nil
 		}
 		m.addMessage(ev.Message, &ev.Chat, ev.Kind == core.EventEdit)
 		cmds := []tea.Cmd{m.afterMove()}
@@ -364,24 +439,77 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if ev.Message.ChatID == m.openID && !ev.Message.Out {
 			cmds = append(cmds, m.markRead(m.openID))
 		}
-		return m, tea.Batch(cmds...)
+		return tea.Batch(cmds...)
 
-	case avatarMsg:
+	case imageMsg:
 		if msg.png == nil {
-			return m, nil // stays 0, initials are shown
+			return nil // stays 0, initials or "[photo]" are shown
 		}
 		m.lastImage = m.lastImage%termimg.MaxID + 1
-		for chatID, id := range m.avatars {
-			if id == m.lastImage {
-				delete(m.avatars, chatID) // ID is being reused
+		for key, img := range m.images {
+			if img.id == m.lastImage {
+				delete(m.images, key) // ID is being reused, it reloads if seen again
 			}
 		}
-		m.avatars[msg.chatID] = m.lastImage
-		return m, tea.Raw(termimg.Transmit(m.lastImage, avatarCols, avatarRows, msg.png))
+		// The picture is shown only once it reached the terminal: placeholder
+		// cells drawn before their image may stay blank.
+		img := shown{m.lastImage, msg.cols, msg.rows}
+		return tea.Sequence(
+			tea.Raw(termimg.Transmit(img.id, img.cols, img.rows, msg.png)),
+			func() tea.Msg { return uploadedMsg{msg.key, img} },
+		)
+
+	case uploadedMsg:
+		m.keepView(msg.key.msg, func() { m.images[msg.key] = msg.img })
+		return nil
+
+	case clipboardMsg:
+		if msg.seq != m.attachSeq {
+			return nil // the chat or the attachment changed since
+		}
+		m.pasting = 0
+		if m.status == waitClipboard {
+			m.status = ""
+		}
+		switch {
+		case msg.png != nil:
+			m.setAttach(core.SendRequest{Photo: msg.png})
+		case msg.text != "":
+			return m.pasteText(msg.text) // no image, ctrl+v pastes text as before
+		case m.termClip && !errors.Is(msg.err, clipboard.ErrNoImage):
+			// No clipboard here, as over SSH. kitty's own paste brings the
+			// user's clipboard without asking, ctrl+v could only with a prompt.
+			m.status = "no clipboard here, paste the image with kitty's paste key (ctrl+shift+v)"
+		default:
+			m.status = msg.err.Error() // nothing pasted, any attachment stays as it was
+		}
+		return nil
+
+	case tea.ModeReportMsg:
+		if msg.Mode == clipboard.PasteEventsMode {
+			m.termClip = !msg.Value.IsNotRecognized() && !msg.Value.IsPermanentlyReset()
+		}
+		return nil
+
+	case uv.UnknownOscEvent:
+		if p, ok := clipboard.ParsePacket(string(msg)); ok {
+			return m.termPacket(p)
+		}
+		return nil
+
+	case tea.PasteMsg:
+		// An empty paste is what some terminals send when the clipboard
+		// holds only an image.
+		if m.focus == focusInput && msg.Content == "" {
+			return m.pasteImage()
+		}
+		if m.focus == focusInput {
+			return m.pasteText(msg.Content)
+		}
 
 	case errMsg:
 		m.status = msg.err.Error()
-		return m, nil
+		return nil
 	}
 
 	// Everything else (paste, cursor blink) belongs to the focused input.
@@ -392,7 +520,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case focusFilter:
 		m.filter, cmd = m.filter.Update(msg)
 	}
-	return m, cmd
+	return cmd
 }
 
 func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
@@ -479,22 +607,24 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 
 	default: // focusInput
 		switch key {
-		case "esc":
-			if m.replyTo != 0 || m.editing != 0 {
+		case "esc", "tab":
+			if m.readingClipboard() {
+				m.attachSeq++ // cancels the read, the clipboard helper may hang
+				return nil
+			}
+			if key == "esc" && (m.replyTo != 0 || m.editing != 0) {
 				m.cancelDraft()
 				return m.afterScroll()
 			}
-			return m.setFocus(focusChats)
-		case "tab":
 			return m.setFocus(focusChats)
 		case "ctrl+up", "alt+up":
 			return m.pickReply(-1)
 		case "ctrl+down", "alt+down":
 			return m.pickReply(1)
 		case "up":
-			if m.input.Value() == "" {
+			if m.input.Value() == "" && !m.attached() {
 				if msg, ok := m.lastOwn(); ok {
-					return m.edit(msg)
+					return m.startEdit(msg)
 				}
 			}
 		case "pgup":
@@ -503,6 +633,17 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		case "pgdown":
 			m.scroll -= max(1, m.messageRows()/2)
 			return m.afterScroll()
+		case "ctrl+v":
+			if m.editing != 0 {
+				m.status = "an edit changes the text only, esc cancels it"
+				return nil
+			}
+			return m.pasteImage()
+		case "backspace":
+			if m.input.Value() == "" && m.attached() {
+				m.setAttach(core.SendRequest{})
+				return nil
+			}
 		case "enter":
 			return m.submit()
 		}
@@ -511,6 +652,8 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 }
+
+func (m *model) attached() bool { return m.attach.File != "" || m.attach.Photo != nil }
 
 // savingNote asks to wait while an edit is saved in the open chat.
 const savingNote = "saving the edit, a moment"
@@ -523,8 +666,12 @@ func (m *model) submit() tea.Cmd {
 		m.status = savingNote
 		return nil
 	}
+	if m.readingClipboard() {
+		m.status = waitClipboard
+		return nil
+	}
 	text := strings.TrimSpace(m.input.Value())
-	chatID, replyTo, editing := m.openID, m.replyTo, m.editing
+	chatID, editing := m.openID, m.editing
 	if editing != 0 {
 		if text == "" {
 			m.status = "a message cannot be empty, esc cancels the edit"
@@ -540,19 +687,23 @@ func (m *model) submit() tea.Cmd {
 			return editedMsg{chatID, editing, text, m.be.Edit(m.ctx, chatID, editing, text)}
 		}
 	}
-	if text == "" {
+	req := m.attach
+	req.Text, req.ReplyTo = text, m.replyTo
+	if req.Text == "" && !m.attached() {
 		return nil
 	}
 	m.input.Reset()
 	m.replyTo = 0
+	m.setAttach(core.SendRequest{})
+	seq := m.attachSeq
 	return func() tea.Msg {
-		sent, err := m.be.Send(m.ctx, chatID, core.SendRequest{Text: text, ReplyTo: replyTo})
-		return sentMsg{sent, err}
+		sent, err := m.be.Send(m.ctx, chatID, req)
+		return sentMsg{seq, req, sent, err}
 	}
 }
 
-// reply makes the composer answer msg, edit starts editing it.
-func (m *model) reply(msg core.Message) tea.Cmd {
+// startReply makes the composer answer msg, startEdit starts editing it.
+func (m *model) startReply(msg core.Message) tea.Cmd {
 	if m.editing != 0 {
 		m.cancelDraft()
 	}
@@ -561,13 +712,16 @@ func (m *model) reply(msg core.Message) tea.Cmd {
 	return tea.Batch(m.setFocus(focusInput), m.afterScroll())
 }
 
-func (m *model) edit(msg core.Message) tea.Cmd {
+func (m *model) startEdit(msg core.Message) tea.Cmd {
 	switch {
 	case !fitsComposer(msg.Text):
 		m.status = "the composer cannot hold this message as it is (line breaks, special characters), edit it in another Telegram app"
 		return nil
 	case m.saving[m.openID] > 0:
 		m.status = savingNote
+		return nil
+	case m.attached():
+		m.status = "send or remove the attachment first, an edit changes the text only"
 		return nil
 	case m.editing == msg.ID:
 		return m.setFocus(focusInput) // keep the changes made so far
@@ -625,7 +779,7 @@ func (m *model) pickReply(delta int) tea.Cmd {
 	case i < 0:
 		return nil // the oldest loaded message, page up loads more
 	}
-	return m.reply(msgs[i])
+	return m.startReply(msgs[i])
 }
 
 // lastOwn is the newest message with text the account sent in the open chat.
@@ -659,10 +813,10 @@ func (m *model) openMenu(x, y int) {
 	}
 	var items []menuItem
 	if !msg.Service {
-		items = append(items, menuItem{"Reply", (*model).reply})
+		items = append(items, menuItem{"Reply", (*model).startReply})
 	}
 	if editable(msg) && fitsComposer(msg.Text) {
-		items = append(items, menuItem{"Edit", (*model).edit})
+		items = append(items, menuItem{"Edit", (*model).startEdit})
 	}
 	if msg.Text != "" {
 		items = append(items, menuItem{"Copy text", func(m *model, msg core.Message) tea.Cmd {
@@ -713,6 +867,94 @@ func (m *model) copy(s, what string) tea.Cmd {
 	return tea.SetClipboard(s)
 }
 
+// pasteText handles text pasted into the composer, by the terminal or read
+// from the clipboard. The path of an image, which is what dropping a file on
+// the terminal pastes, attaches it. It never reads the clipboard itself.
+func (m *model) pasteText(text string) tea.Cmd {
+	if path, ok := imagePath(text); ok && m.editing == 0 {
+		m.setAttach(core.SendRequest{File: path})
+		return nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(tea.PasteMsg{Content: text})
+	return cmd
+}
+
+// waitClipboard is the status shown when enter waits for a clipboard read.
+const waitClipboard = "reading the clipboard, esc cancels"
+
+func (m *model) readingClipboard() bool { return m.pasting != 0 && m.pasting == m.attachSeq }
+
+func (m *model) setAttach(req core.SendRequest) {
+	m.attach = req
+	m.attachSeq++
+}
+
+// pasteImage reads the system clipboard for terminals that only paste text:
+// its image, or else its text.
+func (m *model) pasteImage() tea.Cmd {
+	m.startRead()
+	seq := m.attachSeq
+	return func() tea.Msg {
+		data, err := clipboard.Image(m.ctx)
+		if err != nil {
+			text, _ := textclip.ReadAll()
+			return clipboardMsg{seq: seq, text: text, err: err}
+		}
+		return clipboardMsg{seq: seq, png: data}
+	}
+}
+
+// keepView applies change, which redraws message msgID of the open chat, so
+// that what the user reads does not move. The conversation is anchored at
+// its bottom, so lines that grow inside or below the view would push it up
+// unless the scroll offset grows with them.
+func (m *model) keepView(msgID int, change func()) {
+	h := m.histories[m.openID]
+	_, rw := m.layout()
+	if m.scroll == 0 || h == nil || rw == 0 {
+		change()
+		return
+	}
+	before := m.messageLines(h, rw)
+	top := len(before) - m.scroll - m.messageRows()
+	end := -1 // the line after the message, where lines are added
+	for i, l := range before {
+		if l.msg >= 0 && h.msgs[l.msg].ID == msgID {
+			end = i + 1
+		}
+	}
+	change()
+	if end > top {
+		m.scroll += len(m.messageLines(h, rw)) - len(before)
+	}
+}
+
+// imagePath reports whether pasted text is the absolute path of one image
+// file. File managers and terminals paste it as a file:// URL, quoted, or with
+// spaces escaped by backslashes, so each reading is tried. A bare file name is
+// text: it only names a file by chance.
+func imagePath(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	candidates := []string{text, strings.Trim(text, `'"`), strings.ReplaceAll(text, `\`, "")}
+	if u, err := url.Parse(text); err == nil && u.Scheme == "file" && (u.Host == "" || u.Host == "localhost") {
+		path := u.Path
+		if runtime.GOOS == "windows" && len(path) > 2 && path[0] == '/' && path[2] == ':' {
+			path = filepath.FromSlash(path[1:]) // file:///C:/x.png
+		}
+		candidates = append(candidates, path)
+	}
+	for _, path := range candidates {
+		if !filepath.IsAbs(path) || !core.IsPhotoFile(path) {
+			continue
+		}
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			return path, true
+		}
+	}
+	return "", false
+}
+
 func (m *model) setFocus(f focus) tea.Cmd {
 	m.focus = f
 	m.input.Blur()
@@ -760,32 +1002,74 @@ func (m *model) afterMove() tea.Cmd {
 	if m.sel >= m.top+rows {
 		m.top = m.sel - rows + 1
 	}
-	if !m.images {
+	if !m.graphics {
 		return nil
 	}
 	var cmds []tea.Cmd
 	for _, c := range chats[m.top:min(len(chats), m.top+rows)] {
-		if _, seen := m.avatars[c.ID]; seen {
+		key := imageKey{chat: c.ID}
+		if _, seen := m.images[key]; seen {
 			continue
 		}
-		m.avatars[c.ID] = 0
+		m.images[key] = shown{}
 		chat := *c
 		if chat.PhotoID == 0 {
 			// No photo: the initials badge, drawn as an image so they center.
 			bg, fg := m.st.peer(chat.ID), m.st.theme.Background
 			cmds = append(cmds, func() tea.Msg {
 				png, _ := termimg.Initials(initials(chat.Title), bg, fg, avatarPx)
-				return avatarMsg{chat.ID, png}
+				return imageMsg{key, png, avatarCols, avatarRows}
 			})
 			continue
 		}
 		cmds = append(cmds, func() tea.Msg {
 			data, err := m.be.Avatar(m.ctx, chat)
 			if err != nil {
-				return avatarMsg{chatID: chat.ID}
+				return imageMsg{key: key}
 			}
 			png, _ := termimg.Avatar(data, avatarPx)
-			return avatarMsg{chat.ID, png}
+			return imageMsg{key, png, avatarCols, avatarRows}
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+// loadPhotos requests the photos of the messages on screen in the open chat,
+// sized to fit the conversation pane as it is now.
+func (m *model) loadPhotos() tea.Cmd {
+	h := m.histories[m.openID]
+	_, rw := m.layout()
+	if !m.graphics || h == nil || rw == 0 {
+		return nil
+	}
+	lines := m.messageLines(h, rw)
+	start, end, _, _ := m.shown(len(lines))
+	maxCols := min(photoCols, rw-photoIndent-1)
+	if maxCols < 1 {
+		return nil // no room for a photo, its label is shown
+	}
+	var cmds []tea.Cmd
+	for _, l := range lines[start:end] {
+		if l.msg < 0 || h.msgs[l.msg].Media != core.MediaPhoto {
+			continue
+		}
+		msg := h.msgs[l.msg]
+		key := imageKey{msg.ChatID, msg.ID}
+		// A photo sized for a wider pane is fetched again to fit.
+		if img, seen := m.images[key]; seen && img.cols <= maxCols {
+			continue
+		}
+		m.images[key] = shown{}
+		cmds = append(cmds, func() tea.Msg {
+			data, err := m.be.Photo(m.ctx, key.chat, key.msg)
+			if err != nil {
+				return imageMsg{key: key}
+			}
+			png, cols, rows, err := termimg.Fit(data, maxCols, photoRows)
+			if err != nil {
+				return imageMsg{key: key}
+			}
+			return imageMsg{key, png, cols, rows}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -803,8 +1087,7 @@ func (m *model) afterScroll() tea.Cmd {
 	if rw == 0 {
 		return nil // the conversation is hidden, its width unknown
 	}
-	lines, _ := m.messageLines(h, rw)
-	limit := max(0, len(lines)-m.messageRows())
+	limit := max(0, len(m.messageLines(h, rw))-m.messageRows())
 	m.scroll = max(0, min(m.scroll, limit))
 	if m.scroll < limit || h.done || h.loading || len(h.msgs) == 0 {
 		return nil
@@ -826,6 +1109,7 @@ func (m *model) openSelected() tea.Cmd {
 	m.openID, m.scroll = chatID, 0
 	m.replyTo, m.editing, m.stash = 0, 0, nil
 	m.input.Reset()
+	m.setAttach(core.SendRequest{}) // it was meant for the previous chat
 	cmds := []tea.Cmd{m.setFocus(focusInput)}
 	if h := m.histories[chatID]; h == nil {
 		m.histories[chatID] = &history{loading: true}
@@ -867,6 +1151,7 @@ func (m *model) addMessage(msg core.Message, chat *core.Chat, edit bool) {
 	if h := m.histories[msg.ChatID]; h != nil && h.loaded {
 		if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.ID }); i >= 0 {
 			h.msgs[i] = msg
+			delete(m.images, imageKey{msg.ChatID, msg.ID}) // an edit can replace the photo
 		} else if !edit && (h.done || len(h.msgs) == 0 || msg.ID > h.msgs[0].ID) {
 			// By ID, which is the order Telegram gave them, whatever order
 			// they arrive in. One older than the whole loaded page is left

@@ -12,7 +12,8 @@ A Telegram user client in one Go binary: commands for agents, a TUI for humans. 
 | `internal/demo` | In-memory backend with sample chats, used by `TG_DEMO=1`, tests and screenshots |
 | `internal/cli` | Commands, flag parsing, text and JSON output |
 | `internal/tui` | Bubble Tea v2 interface: `tui.go` state and input, `view.go` rendering |
-| `internal/termimg` | Kitty graphics protocol (Unicode placeholders) for profile pictures |
+| `internal/termimg` | Kitty graphics protocol (Unicode placeholders) for profile pictures and photos |
+| `internal/clipboard` | Reads images from the system clipboard, for pasting them in the TUI |
 | `internal/selfupdate` | Background and manual updates from GitHub releases |
 | `internal/config` | File locations and `config.json`: credentials, accounts, guardrails |
 | `install.sh`, `install.ps1` | One line installers |

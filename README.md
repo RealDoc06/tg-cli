@@ -126,9 +126,17 @@ Run `tg` with no arguments.
 | `ctrl+↑` `ctrl+↓` | Pick the message to reply to (`alt` works too) |
 | `↑` | In an empty composer, edit your last message |
 | `esc` | Cancel the reply or the edit |
+| `ctrl+v` | Attach the image in the clipboard, the message becomes its caption |
+| `backspace` | Remove the attachment, when the message is empty |
 | `q` `ctrl+c` | Quit |
 
 The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages the composer cannot hold as they are (several lines, special characters) are edited elsewhere. New messages arrive live.
+
+To send a picture, copy it and paste it into the composer, or press `ctrl+v`, or drop the file on the terminal, which pastes its path. Without an image in the clipboard, both paste text.
+
+- In kitty, pastes read the clipboard through the terminal, so pictures paste from your own machine even over SSH, with kitty's paste key (`ctrl+shift+v`, `cmd+v` on macOS).
+- `ctrl+v` reads the clipboard with `osascript` on macOS, PowerShell on Windows, and `wl-paste` or `xclip` on Linux. Over SSH that is the remote machine's clipboard, which holds yours only with X11 forwarding or a clipboard bridge.
+- Terminals that keep `ctrl+v` for themselves, like Windows Terminal, need that binding removed.
 
 ### Themes
 
@@ -136,9 +144,9 @@ The mouse works too: click a chat, scroll either pane, right click a message to 
 
 `tg config spacing on` sets messages apart in the conversation: a blank line before a new sender, a pause of more than five minutes, or a new day. Off, the default, packs them together. It is stored as `"spaced_messages"` in `config.json`.
 
-### Profile pictures
+### Pictures
 
-Real profile pictures are drawn in terminals that implement the Kitty graphics protocol with Unicode placeholders: [Kitty](https://sw.kovidgoyal.net/kitty/) and [Ghostty](https://ghostty.org). Elsewhere each chat gets a colored badge with its initials. Inside tmux, pictures need `set -g allow-passthrough on`. Force them on or off with `TG_IMAGES=1` or `TG_IMAGES=0`.
+Profile pictures and photos in conversations are drawn in terminals that implement the Kitty graphics protocol with Unicode placeholders: [Kitty](https://sw.kovidgoyal.net/kitty/) and [Ghostty](https://ghostty.org). A chat without a photo gets a square badge with its initials. Elsewhere the badge is drawn with text, and photos show as `[photo]`. Inside tmux, pictures need `set -g allow-passthrough on`. Force them on or off with `TG_IMAGES=1` or `TG_IMAGES=0`.
 
 ## Updates
 
@@ -159,7 +167,7 @@ Set `TG_NO_AUTOUPDATE=1` to turn the background check off.
 | `TG_ACCOUNT` | Account to act as, instead of the default one |
 | `TG_API_ID`, `TG_API_HASH` | Telegram API credentials, instead of the saved ones |
 | `TG_DEMO=1` | Run everything against built in sample chats, no account needed. Uses its own directory, never your real configuration |
-| `TG_IMAGES=0\|1` | Force profile pictures off or on |
+| `TG_IMAGES=0\|1` | Force pictures off or on |
 | `TG_NO_AUTOUPDATE=1` | Disable background updates |
 | `TG_NO_LOG=1` | Do not record commands in `log.jsonl` |
 

@@ -3,15 +3,16 @@
 # under Xvfb), so pull requests show what a change looks like, images included.
 # Always runs against the demo data (TG_DEMO=1) so no real chat can leak.
 #
-# Usage: scripts/shot.sh <out.png> [--size WxH] [--key K]... [--text T]... -- <command> [';;' <command>]...
+# Usage: scripts/shot.sh <out.png> [--size WxH] [--key K]... [--text T]... [--action A]... -- <command> [';;' <command>]...
 #
 #   scripts/shot.sh docs/chats.png -- tg chats
 #   scripts/shot.sh docs/tui.png --key down --key enter --text "hello" -- tg
 #   scripts/shot.sh docs/two.png -- tg chats -u ';;' tg read alice -n 3
 #
 # Commands separated by ';;' run one after the other, each under its own prompt.
-# --key and --text are replayed in order once the command is up. Keys use
-# kitty's names (enter, down, tab, escape, page_up, ctrl+c ...).
+# --key, --text and --action are replayed in order once the command is up.
+# Keys use kitty's names (enter, down, tab, escape, page_up, ctrl+c ...).
+# Actions are kitty's own, like paste_from_clipboard.
 # Needs Linux with Xvfb and ffmpeg. kitty is downloaded on first use.
 set -euo pipefail
 
@@ -25,6 +26,7 @@ while [ $# -gt 0 ]; do
     --size) size=$2; shift 2 ;;
     --key) steps+=("key:$2"); shift 2 ;;
     --text) steps+=("text:$2"); shift 2 ;;
+    --action) steps+=("action:$2"); shift 2 ;;
     --) shift; break ;;
     *) echo "shot.sh: unknown option $1" >&2; exit 2 ;;
   esac
@@ -87,6 +89,7 @@ for step in "${steps[@]}"; do
   case $step in
     key:*) "$kitty" @ --to "unix:$work/kitty.sock" send-key "${step#key:}" ;;
     text:*) "$kitty" @ --to "unix:$work/kitty.sock" send-text "${step#text:}" ;;
+    action:*) "$kitty" @ --to "unix:$work/kitty.sock" action ${step#action:} ;;
   esac
   sleep 0.6
 done

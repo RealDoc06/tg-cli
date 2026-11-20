@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -52,6 +54,9 @@ type Message struct {
 	Service bool      `json:"service,omitempty"`
 }
 
+// MediaPhoto is the Media of a message that carries a photo.
+const MediaPhoto = "photo"
+
 // User is the logged in account.
 type User struct {
 	ID       int64  `json:"id"`
@@ -75,12 +80,24 @@ type HistoryQuery struct {
 	AfterID  int
 }
 
-// SendRequest is a message to send. File is an optional path to attach, in
-// which case Text becomes the caption.
+// SendRequest is a message to send. File is an optional path to attach, or
+// Photo an encoded image (PNG or JPEG) to send as a photo, in which case Text
+// becomes the caption.
 type SendRequest struct {
 	Text    string
 	ReplyTo int
 	File    string
+	Photo   []byte
+}
+
+// IsPhotoFile reports whether a file is sent as a photo rather than as a
+// document, judging by its extension.
+func IsPhotoFile(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg", ".png", ".webp":
+		return true
+	}
+	return false
 }
 
 // SearchQuery searches messages in one chat, or everywhere when ChatID is 0.
@@ -132,6 +149,9 @@ type Backend interface {
 	Search(ctx context.Context, q SearchQuery) ([]Message, error)
 	// Avatar returns the encoded profile photo of a chat (JPEG or PNG).
 	Avatar(ctx context.Context, chat Chat) ([]byte, error)
+	// Photo returns the encoded photo of a message (JPEG or PNG), at a size
+	// meant for display rather than the original.
+	Photo(ctx context.Context, chatID int64, msgID int) ([]byte, error)
 	// Download saves the media of a message into dir and returns the file path.
 	Download(ctx context.Context, chatID int64, msgID int, dir string) (string, error)
 	// Watch blocks and reports live events until ctx is done, starting with

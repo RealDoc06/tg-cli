@@ -134,7 +134,7 @@ func Run(ctx context.Context, opts Options, fn func(context.Context, core.Backen
 		b := &backend{
 			client: client, api: client.API(), self: selfUser(status.User),
 			peers: loadPeers(peersPath(opts.Account)), sender: newSender(client.API()),
-			gaps: gaps, avatarSlots: make(chan struct{}, 4),
+			gaps: gaps, imageSlots: make(chan struct{}, 4),
 		}
 		b.peers.learn(tg.Entities{Users: map[int64]*tg.User{status.User.ID: status.User}}, b.self.ID)
 		dispatcher.OnAnyNewMessage(func(_ context.Context, e tg.Entities, msg tg.MessageClass) error {

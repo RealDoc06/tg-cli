@@ -2,7 +2,7 @@ package tui
 
 import (
 	"fmt"
-	"slices"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -74,13 +74,13 @@ func (m *model) messageAt(y int) (core.Message, bool) {
 	if h == nil || !h.loaded || rw == 0 {
 		return core.Message{}, false
 	}
-	_, ids := m.messageLines(h, rw)
-	start, end, pad, overflow := m.shown(len(ids))
+	lines := m.messageLines(h, rw)
+	start, end, pad, overflow := m.shown(len(lines))
 	i := start + y - (messagesTop - overflow) - pad
-	if i < start || i >= end || ids[i] == 0 {
+	if i < start || i >= end || lines[i].msg < 0 {
 		return core.Message{}, false
 	}
-	return m.message(ids[i])
+	return h.msgs[lines[i].msg], true
 }
 
 // revealMessage scrolls the conversation so message id is on screen.
@@ -90,21 +90,24 @@ func (m *model) revealMessage(id int) {
 	if h == nil || rw == 0 {
 		return
 	}
-	_, ids := m.messageLines(h, rw)
-	first, last := slices.Index(ids, id), -1
-	for i, line := range ids {
-		if line == id {
+	lines := m.messageLines(h, rw)
+	first, last := -1, -1
+	for i, l := range lines {
+		if l.msg >= 0 && h.msgs[l.msg].ID == id {
 			last = i
+			if first < 0 {
+				first = i
+			}
 		}
 	}
 	if first < 0 {
 		return
 	}
-	if end := len(ids) - m.scroll; last >= end {
-		m.scroll = len(ids) - 1 - last
+	if end := len(lines) - m.scroll; last >= end {
+		m.scroll = len(lines) - 1 - last
 	}
-	if start := len(ids) - m.scroll - m.messageRows(); first < start {
-		m.scroll = len(ids) - first - m.messageRows()
+	if start := len(lines) - m.scroll - m.messageRows(); first < start {
+		m.scroll = len(lines) - first - m.messageRows()
 	}
 	m.scroll = max(0, m.scroll)
 }
@@ -176,7 +179,8 @@ func (m *model) View() tea.View {
 	return v
 }
 
-// chatList renders the filter line followed by two lines per chat.
+// chatList renders the filter line followed by two lines per chat, set apart
+// by chatGap blank ones.
 func (m *model) chatList(w, h int) []string {
 	rows := make([]string, 0, h)
 	switch {
@@ -254,11 +258,12 @@ func (m *model) chatRow(c *core.Chat, selected bool, w int) []string {
 	}
 }
 
-// avatar returns the two lines of a chat's picture: the real image when the
-// terminal can draw it and it is loaded, a colored initials badge otherwise.
+// avatar returns the two lines of a chat's picture: the photo or initials
+// badge uploaded to the terminal when it can draw them, colored initials in
+// cells otherwise.
 func (m *model) avatar(c *core.Chat) []string {
-	if id := m.avatars[c.ID]; id != 0 {
-		return termimg.Placeholder(id, avatarCols, avatarRows)
+	if img := m.images[imageKey{chat: c.ID}]; img.id != 0 {
+		return termimg.Placeholder(img.id, avatarCols, avatarRows)
 	}
 	color := m.st.peer(c.ID)
 	fill := lipgloss.NewStyle().Background(color).Foreground(m.st.theme.Background).Bold(true)
@@ -289,27 +294,41 @@ func (m *model) conversation(w, h int) []string {
 		title += m.st.muted.Render("  @" + c.Username)
 	}
 	rows = append(rows, spread(title, m.st.muted.Render(string(c.Kind))+" ", w))
-
 	rows = append(rows, strings.Repeat(" ", w))
 
-	lines, _ := m.messageLines(hist, w)
+	lines := m.messageLines(hist, w)
 	if !hist.loaded {
-		lines = []string{m.st.muted.Render(" loading")}
+		lines = []msgLine{{m.st.muted.Render(" loading"), -1}}
 	}
 	start, end, pad, overflow := m.shown(len(lines))
 	for range pad {
 		rows = append(rows, strings.Repeat(" ", w))
 	}
 	for _, l := range lines[start:end] {
-		rows = append(rows, fit(l, w))
+		rows = append(rows, fit(l.text, w))
 	}
 
 	rows = append(rows, strings.Repeat(" ", w))
 	if m.draftRows() > 0 {
 		rows = append(rows, m.draftLine(w))
 	}
-	m.input.SetWidth(w - 4)
-	m.input.Placeholder = "message " + c.Title
+
+	// An attachment shows in the prompt, the text becomes its caption.
+	m.input.Prompt, m.input.Placeholder = "> ", "message "+c.Title
+	switch {
+	case m.attach.Photo != nil:
+		m.input.Prompt, m.input.Placeholder = "[image] > ", "add a caption"
+	case m.attach.File != "":
+		name := strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return -1
+			}
+			return r
+		}, filepath.Base(m.attach.File))
+		m.input.Prompt, m.input.Placeholder = "["+ansi.Truncate(name, max(4, w/3), "…")+"] > ", "add a caption"
+	}
+	m.input.SetWidth(max(1, w-2-ansi.StringWidth(m.input.Prompt)))
+	m.input.SetCursor(m.input.Position()) // SetWidth alone keeps the old visible window
 	rows = append(rows, fit(" "+m.input.View(), w))
 	return rows[overflow:]
 }
@@ -335,17 +354,26 @@ func (m *model) draftLine(w int) string {
 // drawn together when spaced.
 const groupGap = 5 * time.Minute
 
+// photoIndent is the hanging indent of message bodies: " HH:MM ".
+const photoIndent = 7
+
+// msgLine is one line of the conversation, msg is the index of the message
+// it belongs to, -1 for date lines.
+type msgLine struct {
+	text string
+	msg  int
+}
+
 // messageLines lays the history out for a pane of width w: a date line per
-// day, then "HH:MM Name: text" wrapped with a hanging indent. Spaced, a gap
-// sets apart a new sender or a pause, and each day; otherwise messages are
-// packed. ids holds the message ID of each line, 0 for
-// dates and gaps. The message being replied to or edited is marked.
-func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
-	const indent = 7 // " HH:MM "
-	add := func(id int, line string) {
-		lines, ids = append(lines, line), append(ids, id)
-	}
+// day, then "HH:MM Name: text" wrapped with a hanging indent, and the photo
+// below when it is loaded. Spaced, a gap sets apart a new sender or a pause,
+// and each day; otherwise messages are packed. Gaps and dates belong to no
+// message. The message being replied to or edited is marked.
+func (m *model) messageLines(h *history, w int) []msgLine {
+	const indent = photoIndent
+	pad := strings.Repeat(" ", indent)
 	byID := make(map[int]*core.Message, len(h.msgs))
+	var lines []msgLine
 	var day string
 	for i := range h.msgs {
 		msg := &h.msgs[i]
@@ -353,33 +381,42 @@ func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 
 		if d := msg.Date.Format("Mon 2 Jan 2006"); d != day {
 			if day != "" && m.spaced {
-				add(0, "")
+				lines = append(lines, msgLine{"", -1})
 			}
 			day = d
-			add(0, center(m.st.muted.Render(d), w))
+			lines = append(lines, msgLine{center(m.st.muted.Render(d), w), -1})
 		} else if prev := h.msgs[i-1]; m.spaced && (prev.Out != msg.Out || prev.FromID != msg.FromID ||
 			prev.Service != msg.Service || msg.Date.Sub(prev.Date) > groupGap) {
-			add(0, "")
+			lines = append(lines, msgLine{"", -1})
 		}
 
-		mark := " "
+		// The message being replied to or edited is marked in the first
+		// column, which is otherwise blank.
+		mark, padded := " ", pad
 		if msg.ID == m.replyTo || msg.ID == m.editing {
 			mark = m.st.accent.Render("▌")
+			padded = mark + pad[1:]
 		}
 		if ref := byID[msg.ReplyTo]; ref != nil {
 			quote := ansi.Truncate(firstWord(ref.From)+": "+strings.Join(strings.Fields(ref.Preview()), " "), w-indent-3, "…")
-			add(msg.ID, mark+strings.Repeat(" ", indent-1)+m.st.muted.Render("↪ "+quote))
+			lines = append(lines, msgLine{padded + m.st.muted.Render("↪ "+quote), i})
 		}
 
 		name := lipgloss.NewStyle().Foreground(m.st.peer(msg.FromID)).Render(msg.From)
 		if msg.Out {
 			name = m.st.accent.Render("You")
 		}
+		// A photo that is drawn replaces its "[photo]" label, unless the
+		// pane became too narrow for it.
+		photo := m.images[imageKey{msg.ChatID, msg.ID}]
+		if msg.Media != core.MediaPhoto || photo.cols > w-indent-1 {
+			photo = shown{}
+		}
 		body := msg.Text
-		if msg.Media != "" {
+		if msg.Media != "" && photo.id == 0 {
 			body = strings.TrimSpace(m.st.muted.Render("["+msg.Media+"]") + " " + body)
 		}
-		text := name + ": " + body
+		text := strings.TrimSpace(name + ": " + body)
 		if msg.Service {
 			text = m.st.muted.Render(msg.From + " " + msg.Text)
 		}
@@ -388,14 +425,19 @@ func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 		}
 
 		for j, l := range strings.Split(ansi.Wrap(text, max(10, w-indent-1), ""), "\n") {
-			prefix := mark + strings.Repeat(" ", indent-1)
+			prefix := padded
 			if j == 0 {
 				prefix = mark + m.st.muted.Render(msg.Date.Format("15:04")) + " "
 			}
-			add(msg.ID, prefix+l)
+			lines = append(lines, msgLine{prefix + l, i})
+		}
+		if photo.id != 0 {
+			for _, l := range termimg.Placeholder(photo.id, photo.cols, photo.rows) {
+				lines = append(lines, msgLine{padded + l, i})
+			}
 		}
 	}
-	return lines, ids
+	return lines
 }
 
 func (m *model) statusLine() string {
@@ -409,7 +451,10 @@ func (m *model) statusLine() string {
 	case m.focus == focusInput && m.replyTo != 0:
 		hints = [][2]string{{"ctrl+↑↓", "pick"}, {"esc", "cancel"}}
 	case m.focus == focusInput:
-		hints = [][2]string{{"ctrl+↑↓", "reply"}, {"↑", "edit last"}, {"right click", "more"}, {"esc", "chats"}, {"pgup/pgdn", "scroll"}, {"ctrl+c", "quit"}}
+		hints = [][2]string{{"ctrl+↑↓", "reply"}, {"↑", "edit last"}, {"right click", "more"}, {"ctrl+v", "paste image"}, {"esc", "chats"}, {"pgup/pgdn", "scroll"}, {"ctrl+c", "quit"}}
+		if m.attached() {
+			hints[3] = [2]string{"backspace", "remove attachment"}
+		}
 	case m.focus == focusFilter:
 		hints = [][2]string{{"type", "to filter"}, {"enter", "open"}, {"esc", "clear"}}
 	}
