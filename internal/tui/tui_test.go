@@ -236,33 +236,47 @@ func TestEditKeepsLinesAndDraft(t *testing.T) {
 	}
 }
 
-// While an edit is saved the composer stays empty, so a second enter sends
-// nothing. A failed edit comes back to the composer, and cancelling it gives
-// back the draft with the reply it was for.
-func TestFailedEditComesBack(t *testing.T) {
-	m := loaded(t, 120, 30)
-	open(t, m, 1)
-	msgs := m.histories[m.openID].msgs
-	m.pickReply(-1)
-	m.input.SetValue("half typed")
-	own, _ := m.lastOwn()
-	m.edit(own)
-	m.input.SetValue("new text")
+// Saving an edit puts the draft and its reply back at once, and nothing is
+// sent until the save is done. A failed edit comes back over the draft, and
+// cancelling it gives the draft back again.
+func TestEditGivesTheDraftBack(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		m := loaded(t, 120, 30)
+		open(t, m, 1)
+		msgs := m.histories[m.openID].msgs
+		replyTo := msgs[len(msgs)-1].ID
+		m.pickReply(-1)
+		m.input.SetValue("half typed")
+		own, _ := m.lastOwn()
+		m.edit(own)
+		m.input.SetValue("new text")
 
-	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
-	_, save := m.Update(enter)
-	if _, cmd := m.Update(enter); cmd != nil {
-		t.Fatal("a second enter while the edit is saved sent something")
-	}
-	result := save().(editedMsg)
-	result.err = errors.New("MESSAGE_EDIT_TIME_EXPIRED")
-	m.Update(result)
-	if m.editing != own.ID || m.input.Value() != "new text" {
-		t.Fatalf("after the failure: editing %d, composer %q", m.editing, m.input.Value())
-	}
+		enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+		_, save := m.Update(enter)
+		draftBack := func(when string) {
+			t.Helper()
+			if m.editing != 0 || m.input.Value() != "half typed" || m.replyTo != replyTo {
+				t.Errorf("fails=%v, %s: editing %d, composer %q replying to %d", fails, when, m.editing, m.input.Value(), m.replyTo)
+			}
+		}
+		draftBack("while saving")
+		if _, cmd := m.Update(enter); cmd != nil {
+			t.Fatal("enter while the edit is saved sent the draft")
+		}
 
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if want := msgs[len(msgs)-1].ID; m.input.Value() != "half typed" || m.replyTo != want {
-		t.Errorf("draft %q replying to %d, want %q replying to %d", m.input.Value(), m.replyTo, "half typed", want)
+		result := save().(editedMsg)
+		if fails {
+			result.err = errors.New("MESSAGE_EDIT_TIME_EXPIRED")
+		}
+		m.Update(result)
+		if !fails {
+			draftBack("after the save")
+			continue
+		}
+		if m.editing != own.ID || m.input.Value() != "new text" {
+			t.Fatalf("after the failure: editing %d, composer %q", m.editing, m.input.Value())
+		}
+		m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		draftBack("after cancelling the failed edit")
 	}
 }
