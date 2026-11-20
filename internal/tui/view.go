@@ -196,9 +196,9 @@ func (m *model) View() tea.View {
 			}
 		}
 	}
-	if m.settings != nil {
-		x, y, w := m.settingsBox()
-		for i, line := range m.settingsLines(w) {
+	if m.panel != nil {
+		x, y, lines, _ := m.panelView()
+		for i, line := range lines {
 			if y+i < len(rows) {
 				rows[y+i] = overlay(rows[y+i], line, x, m.width)
 			}
@@ -336,7 +336,8 @@ func (m *model) conversation(w, h int) ([]string, int) {
 		for len(rows) < h {
 			rows = append(rows, strings.Repeat(" ", w))
 		}
-		if h > 2 {
+		// The panel would cover the hint all but its ends.
+		if h > 2 && m.panel == nil {
 			rows[h/2] = center(m.st.muted.Render("select a chat and press enter"), w)
 		}
 		return rows, -1
@@ -619,7 +620,7 @@ func (m *model) buttonLines(keyboard [][]core.Button, w int) []msgLine {
 
 func (m *model) statusLine() string {
 	// Each hint is a key and what it does.
-	hints := [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "compose"}, {"esc", "settings"}, {"q", "quit"}}
+	hints := [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "compose"}, {"esc", "menu"}, {"q", "quit"}}
 	if m.filter.Value() != "" {
 		hints[4] = [2]string{"esc", "clear filter"}
 	}
@@ -634,8 +635,12 @@ func (m *model) statusLine() string {
 		quit = "clear"
 	}
 	switch {
-	case m.settings != nil:
-		hints = [][2]string{{"↑↓", "move"}, {"←→", "change"}, {"esc", "close"}}
+	case m.panel != nil && m.panel.page == pageSettings:
+		hints = [][2]string{{"↑↓", "move"}, {"←→", "change"}, {"esc", "back"}}
+	case m.panel != nil && m.panel.page == pageHelp:
+		hints = [][2]string{{"esc", "back"}}
+	case m.panel != nil:
+		hints = [][2]string{{"↑↓", "move"}, {"enter", "pick"}, {"esc", "close"}}
 	case m.menu != nil:
 		hints = [][2]string{{"↑↓", "move"}, {"enter", "pick"}, {"esc", "close"}}
 	case m.focus == focusInput && m.editing != 0:

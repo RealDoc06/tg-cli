@@ -23,7 +23,7 @@ type Theme struct {
 }
 
 // DefaultTheme is used when config.json names none.
-const DefaultTheme = "mocha"
+const DefaultTheme = "frappe"
 
 // Themes lists every theme, in the order `tg config` shows them. The four
 // Catppuccin flavors use their base, text, subtext0, surface1, sky and red,

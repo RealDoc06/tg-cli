@@ -68,10 +68,10 @@ type model struct {
 	graphics bool
 	st       styles
 	look     Look
-	// save writes a change of the settings menu to config.json, nil when
+	// save writes a change made in the settings to config.json, nil when
 	// there is nowhere to save it.
-	save     func(change func(*Look)) error
-	settings *settingsMenu // the open settings menu, nil when there is none
+	save  func(change func(*Look)) error
+	panel *panel // the menu esc opens, nil when it is closed
 
 	width, height int
 	focus         focus
@@ -366,7 +366,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.key(msg)
 
 	case tea.MouseWheelMsg:
-		if m.settings != nil {
+		if m.panel != nil {
 			return nil
 		}
 		m.menu = nil
@@ -383,14 +383,14 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 
 	case tea.MouseClickMsg:
 		lw, _ := m.layout()
-		if m.settings != nil {
-			// A click on a setting changes it, anywhere else closes the menu.
-			x, y, w := m.settingsBox()
-			if i := msg.Y - y - settingsTop; msg.Button == tea.MouseLeft && i >= 0 && i < len(settingsItems) && msg.X >= x && msg.X < x+w {
-				m.settings.sel = i
-				return m.changeSetting(1)
+		if m.panel != nil {
+			// A click on a line picks it, anywhere else closes the panel.
+			x, y, lines, first := m.panelView()
+			if i := msg.Y - y - first; msg.Button == tea.MouseLeft && i >= 0 && i < m.panel.items() && msg.X >= x && msg.X < x+ansi.StringWidth(lines[0]) {
+				m.panel.sel = i
+				return m.pick()
 			}
-			m.settings = nil
+			m.panel = nil
 			return nil
 		}
 		if m.menu != nil {
@@ -680,21 +680,8 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return tea.Quit
 	}
 
-	if m.settings != nil {
-		n := len(settingsItems)
-		switch key {
-		case "up", "k", "shift+tab":
-			m.settings.sel = (m.settings.sel + n - 1) % n
-		case "down", "j", "tab":
-			m.settings.sel = (m.settings.sel + 1) % n
-		case "left", "h":
-			return m.changeSetting(-1)
-		case "right", "l", "enter", "space":
-			return m.changeSetting(1)
-		case "esc", "q":
-			m.settings = nil
-		}
-		return nil
+	if m.panel != nil {
+		return m.panelKey(key)
 	}
 
 	if m.menu != nil {
@@ -747,7 +734,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 			return m.setFocus(focusFilter)
 		case "esc":
 			if m.filter.Value() == "" {
-				m.settings = &settingsMenu{}
+				m.panel = &panel{}
 				return nil
 			}
 			m.filter.Reset()
