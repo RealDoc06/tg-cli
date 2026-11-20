@@ -723,6 +723,10 @@ func (m *model) startEdit(msg core.Message) tea.Cmd {
 	case m.attached():
 		m.status = "send or remove the attachment first, an edit changes the text only"
 		return nil
+	case m.readingClipboard():
+		// The image being read would attach to the edit.
+		m.status = waitClipboard
+		return nil
 	case m.editing == msg.ID:
 		return m.setFocus(focusInput) // keep the changes made so far
 	}

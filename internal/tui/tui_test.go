@@ -736,3 +736,16 @@ func TestSpacingSetsMessagesApart(t *testing.T) {
 		t.Error("spacing on left no gap between messages")
 	}
 }
+
+// An edit changes the text only: it cannot start while a pasted image is
+// still being read, which would attach to it.
+func TestEditWaitsForTheClipboard(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	m.startRead()
+	own, _ := m.lastOwn()
+	m.startEdit(own)
+	if m.editing != 0 || m.status != waitClipboard {
+		t.Errorf("edit started during a clipboard read: editing %d, status %q", m.editing, m.status)
+	}
+}
