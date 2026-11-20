@@ -101,13 +101,6 @@ section { padding-block: clamp(3rem, 7vw, 5.5rem); }
 .head { display: grid; gap: 1rem; margin-bottom: clamp(1.75rem, 4vw, 2.75rem); }
 .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(2rem, 5vw, 4rem); align-items: center; }
 .split .head { margin-bottom: 0; }
-/* Terminal first, words second: alternates with the section above. */
-.split.flip { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
-.split.flip > .head { order: 2; }
-.links { display: flex; flex-wrap: wrap; gap: .6rem 1.75rem; margin-top: .5rem; font-weight: 500; }
-.links a { color: var(--muted); }
-.links a:first-child { color: var(--sky); }
-.links a:hover { color: var(--fg); }
 
 .checks { display: grid; gap: .7rem; color: var(--muted); }
 .checks.row { display: flex; flex-wrap: wrap; gap: .7rem 2rem; margin-top: 1.5rem; }
@@ -213,8 +206,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: .6rem 1.5rem; }
 footer a:hover { color: var(--fg); }
 
 @media (max-width: 56rem) {
-  .split, .split.flip { grid-template-columns: minmax(0, 1fr); }
-  .split.flip > .head { order: 0; }
+  .split { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 40rem) {
   .phone-only { display: block; }
@@ -236,7 +228,6 @@ footer a:hover { color: var(--fg); }
 <header class="wrap top">
   <a class="mark" href="/" aria-label="tg">tg<span class="cur"></span></a>
   <nav>
-    <a href="#contribute">Contribute</a>
     <a href="https://github.com/RealDoc06/tg-cli#readme">Docs</a>
     <a href="https://github.com/RealDoc06/tg-cli">GitHub</a>
   </nav>
@@ -389,37 +380,6 @@ them, to real people, and cannot be taken back by this tool.
   </div>
 </section>
 
-<section id="contribute">
-  <div class="wrap split flip">
-    <div class="head">
-      <h2>Fork it. Make it yours.</h2>
-      <p class="lead">One Go module, no services. The demo backend runs the whole client on sample chats, so you can hack on it without an account.</p>
-      <ul class="checks">
-        <li>Every Telegram call behind one interface</li>
-        <li>Focused tests, one command</li>
-        <li><code>AGENTS.md</code> onboards your coding agent</li>
-      </ul>
-      <p class="links">
-        <a href="https://github.com/RealDoc06/tg-cli/fork">Fork on GitHub</a>
-        <a href="https://github.com/RealDoc06/tg-cli/blob/main/AGENTS.md">Read AGENTS.md</a>
-        <a href="https://github.com/RealDoc06/tg-cli/issues">Issues</a>
-      </p>
-    </div>
-    <div class="term" data-term>
-      <div class="bar"><span class="label">hacking</span><button type="button" class="replay" data-replay aria-label="Replay the hacking session" title="Replay"><svg class="stroke" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button></div>
-<pre tabindex="0" role="region" aria-label="Terminal session"><span><span class="p">$ </span><span class="c">git clone https://github.com/RealDoc06/tg-cli &amp;&amp; cd tg-cli</span>
-</span><span><span class="p">$ </span><span class="c">TG_DEMO=1 go run ./cmd/tg</span><span class="k">   # sample chats, no account</span>
-</span><span><span class="p">$ </span><span class="c">go test ./...</span>
-</span><span class="t">ok    internal/cli    0.224s
-ok    internal/core   (cached)
-ok    internal/mtp    (cached)
-ok    internal/tui    0.323s
-</span><span><span class="p">$ </span><span class="c">claude "read AGENTS.md, then add a theme"</span>
-</span><span><span class="p">$ </span><span class="cur"></span></span></pre>
-    </div>
-  </div>
-</section>
-
 </main>
 
 <footer>
@@ -455,8 +415,7 @@ function paintCommand(text) {
   let program = true;
   return text.split(/("[^"]*"|\s+|\|)/).filter(Boolean).map((token) => {
     if (!token.trim()) return token;
-    if (token === '|' || token === '&&') { program = true; return paint('op', token); }
-    if (program && /^\w+=/.test(token)) return paint('flag', token); // an environment variable before the program
+    if (token === '|') { program = true; return paint('op', token); }
     if (program) { program = false; return paint('fn', token); }
     if (token.startsWith('"')) return paint('str', token);
     if (token.startsWith('-')) return paint('flag', token);
