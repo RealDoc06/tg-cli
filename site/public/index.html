@@ -557,7 +557,7 @@ copyButton.addEventListener('click', async () => {
     return;
   }
   copyButton.classList.add('done');
-  copyStatus.textContent = 'Copied';
+  copyStatus.textContent = 'Copied. The command is also selected, in case the copy was blocked.'; // a blocked write resolves too
   copyTimer = setTimeout(resetCopy, 1600);
 });
 
