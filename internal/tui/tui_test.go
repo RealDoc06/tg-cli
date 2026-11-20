@@ -857,3 +857,17 @@ func TestLeavingAChatStopsItsPictures(t *testing.T) {
 		t.Error("a stopped picture would never load again")
 	}
 }
+
+// A new picture never takes the ID of one still shown, nor one freed a
+// moment ago: its delete may reach the terminal after the new upload.
+func TestNewPicturesTakeFreeIDs(t *testing.T) {
+	m := loaded(t, 120, 30)
+	m.images = map[imageKey]shown{}
+	for id := 1; id <= 3; id++ {
+		m.images[imageKey{1, id}] = shown{id: id}
+	}
+	m.freedAt[4] = time.Now()
+	if id := m.nextImage(); id != 5 {
+		t.Errorf("took ID %d, want 5", id)
+	}
+}

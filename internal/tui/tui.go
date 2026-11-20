@@ -112,8 +112,10 @@ type model struct {
 	// freed, before the terminal drops pictures on its own.
 	stored     []stored
 	imageBytes int
-	// free lists terminal images to delete, sent after the update.
+	// free lists terminal images to delete, sent after the update. freedAt
+	// tells when, so a delete still on its way never hits a new picture.
 	free    []int
+	freedAt map[int]time.Time
 	loadSeq int
 	// view is cancelled when another chat opens, which stops loading the
 	// pictures of the one left. jobs bounds how many load at once.
@@ -265,7 +267,10 @@ func Run(ctx context.Context, be core.Backend, version, account string, look Loo
 // is not a theme falls back to the default and says so.
 func newModel(ctx context.Context, be core.Backend, theme string) *model {
 	t, ok := FindTheme(theme)
-	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}, saving: map[int64]int{}, jobs: make(chan struct{}, 3)}
+	m := &model{
+		ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}, saving: map[int64]int{},
+		jobs: make(chan struct{}, 3), freedAt: map[int]time.Time{},
+	}
 	m.view, m.leave = context.WithCancel(ctx)
 	if !ok {
 		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", theme, strings.Join(ThemeNames(), ", "))
@@ -303,7 +308,14 @@ func (m *model) Init() tea.Cmd {
 // whatever moved them there.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{m.update(msg), m.loadPictures()}
+	if m.imageBytes > imageBudget {
+		m.evict() // pictures that left the view can go now
+	}
 	if len(m.free) > 0 {
+		now := time.Now()
+		for _, id := range m.free {
+			m.freedAt[id] = now
+		}
 		cmds = append(cmds, tea.Raw(termimg.DeleteAll(m.free)))
 		m.free = nil
 	}
@@ -490,17 +502,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		if msg.frames == nil {
 			return nil // stays 0, initials or the "[photo]" label are shown
 		}
-		m.lastImage = m.lastImage%termimg.MaxID + 1
-		m.free = slices.DeleteFunc(m.free, func(id int) bool { return id == m.lastImage })
-		for key, img := range m.images {
-			if img.id == m.lastImage {
-				m.forget(key) // ID is being reused, it reloads if seen again
-			}
-		}
 		// The picture is shown only once it reached the terminal: placeholder
 		// cells drawn before their image may stay blank. An animation plays
 		// in the terminal from then on, without redraws.
-		img := shown{m.lastImage, msg.cols, msg.rows, termimg.Footprint(msg.frames), msg.seq}
+		img := shown{m.nextImage(), msg.cols, msg.rows, termimg.Footprint(msg.frames), msg.seq}
 		return tea.Sequence(
 			tea.Raw(termimg.Transmit(img.id, img.cols, img.rows, msg.frames[0])+termimg.Play(img.id, msg.gap, msg.frames[1:])),
 			func() tea.Msg { return uploadedMsg{msg.key, img} },
@@ -1178,11 +1183,53 @@ func (m *model) loading(key imageKey) int {
 	return m.loadSeq
 }
 
+// nextImage picks the ID of a new picture: the next one in turn that no
+// picture holds and that was not freed in the last second, as its delete may
+// still be on its way. With none left, the oldest picture off screen gives
+// its ID up: the upload replaces it, no delete needed.
+func (m *model) nextImage() int {
+	held := map[int]bool{}
+	for _, img := range m.images {
+		held[img.id] = true
+	}
+	cooling := func(id int) bool { return time.Since(m.freedAt[id]) < time.Second }
+	for i := range termimg.MaxID {
+		if id := (m.lastImage+i)%termimg.MaxID + 1; !held[id] && !cooling(id) {
+			m.lastImage = id
+			return id
+		}
+	}
+	screen := m.onScreen()
+	for _, s := range m.stored {
+		if img, ok := m.images[s.key]; ok && img.id == s.id && !screen[s.key] {
+			m.forget(s.key)
+			m.lastImage = s.id
+			return s.id
+		}
+	}
+	// Every ID is on screen: the next in turn is replaced.
+	m.lastImage = m.lastImage%termimg.MaxID + 1
+	for key, img := range m.images {
+		if img.id == m.lastImage {
+			m.forget(key)
+		}
+	}
+	return m.lastImage
+}
+
 // forget drops the picture of key from the count, for when the terminal
-// image is gone or about to be replaced.
+// image is gone or about to be replaced. Its rows leave the conversation
+// without moving what the user reads.
 func (m *model) forget(key imageKey) {
-	m.imageBytes -= m.images[key].bytes
-	delete(m.images, key)
+	change := func() {
+		m.imageBytes -= m.images[key].bytes
+		delete(m.images, key)
+	}
+	if key.chat == m.openID && key.msg != 0 {
+		m.keepView(key.msg, change)
+		return
+	}
+	change()
 }
 
 // drop forgets the picture of key and frees its image in the terminal. It
@@ -1223,12 +1270,15 @@ func (m *model) evict() {
 // view and the media of the messages in view.
 func (m *model) onScreen() map[imageKey]bool {
 	keys := map[imageKey]bool{}
-	chats := m.visible()
-	for _, c := range chats[min(m.top, len(chats)):min(len(chats), m.top+m.listRows())] {
-		keys[imageKey{chat: c.ID}] = true
+	lw, rw := m.layout()
+	if lw > 0 {
+		chats := m.visible()
+		for _, c := range chats[min(m.top, len(chats)):min(len(chats), m.top+m.listRows())] {
+			keys[imageKey{chat: c.ID}] = true
+		}
 	}
 	h := m.histories[m.openID]
-	if _, rw := m.layout(); h != nil && rw > 0 {
+	if h != nil && rw > 0 {
 		lines := m.messageLines(h, rw)
 		start, end, _, _ := m.shown(len(lines))
 		for _, l := range lines[start:end] {

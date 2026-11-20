@@ -69,7 +69,7 @@ func (r *renderer) layers(dst *image.RGBA, ls []layer, frame float64, base affin
 			byIndex[*ls[i].Index] = &ls[i]
 		}
 	}
-	for i := len(ls) - 1; i >= 0; i-- {
+	for i := len(ls) - 1; i >= 0 && r.raster.work <= workBudget; i-- {
 		l := &ls[i]
 		if l.MatteSource != 0 || !l.visible(frame) {
 			continue
@@ -78,7 +78,10 @@ func (r *renderer) layers(dst *image.RGBA, ls []layer, frame float64, base affin
 			r.layer(dst, l, frame, base, byIndex, depth)
 			continue
 		}
-		r.raster.work += 2 * r.canvas.Dx() * r.canvas.Dy() / pixelWork // the layer and its matte, alone
+		// The layer and its matte, each alone.
+		if r.raster.work += 2 * r.canvas.Dx() * r.canvas.Dy() / pixelWork; r.raster.work > workBudget {
+			return
+		}
 		buf := r.buffer()
 		r.layer(buf, l, frame, base, byIndex, depth)
 		src := (*layer)(nil)
@@ -114,13 +117,15 @@ func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, 
 	out := dst
 	if alone {
 		// A buffer of its own, its masks and compositing touch the canvas.
-		r.raster.work += (1 + len(l.Masks)) * r.canvas.Dx() * r.canvas.Dy() / pixelWork
+		if r.raster.work += (1 + len(l.Masks)) * r.canvas.Dx() * r.canvas.Dy() / pixelWork; r.raster.work > workBudget {
+			return
+		}
 		out = r.buffer()
 		defer r.release(out)
 	}
 	switch l.Type {
 	case layerShape:
-		b := builder{frame: local}
+		b := builder{frame: local, work: &r.raster.work}
 		b.group(l.Shapes, m, 1, nil, nil)
 		b.draw(r.raster, out)
 	case layerSolid:
@@ -197,6 +202,9 @@ func (r *renderer) applyMasks(buf *image.RGBA, masks []mask, frame float64, m af
 		}
 	}
 	for _, mk := range masks {
+		if r.raster.work > workBudget {
+			return
+		}
 		r.raster.polygon(flatten(mk.Path.at(frame), m).pts...)
 		alpha := r.raster.coverage(b)
 		o := mk.Opacity.scalar(frame, 100) / 100
@@ -302,6 +310,13 @@ type builder struct {
 	frame  float64
 	trims  []*trim  // in the order met: outer ones first
 	styles []*style // bottom one first, the order they are painted in
+	work   *int     // the frame's work, see workBudget
+}
+
+// spend adds to the frame's work and reports whether it is still in budget.
+func (b *builder) spend(n int) bool {
+	*b.work += n
+	return *b.work <= workBudget
 }
 
 func (b *builder) group(items []shape, m affine, opacity float64, styles []*style, trims []*trim) {
@@ -336,7 +351,15 @@ func (b *builder) group(items []shape, m affine, opacity float64, styles []*styl
 		case "gr":
 			b.group(it.Items, m, opacity, styles, trims)
 		case "sh", "rc", "el":
+			// Each style and trim above holds the shape: files can multiply
+			// shapes by styles.
+			if !b.spend(1 + len(styles) + len(trims)) {
+				return
+			}
 			e := &entry{paths: []polyline{flatten(b.geometry(it), m)}}
+			if !b.spend(len(e.paths[0].pts)) {
+				return
+			}
 			for _, s := range styles {
 				s.entries = append(s.entries, e)
 			}
@@ -367,6 +390,9 @@ func (b *builder) geometry(it *shape) bezier {
 // draw trims the outlines, nearest trim first, then paints every style.
 func (b *builder) draw(r *raster, dst *image.RGBA) {
 	for _, t := range slices.Backward(b.trims) {
+		if !b.spend(len(t.targets)) {
+			return
+		}
 		slices.Reverse(t.targets)
 		if t.together {
 			var all []polyline
@@ -390,6 +416,9 @@ func (b *builder) draw(r *raster, dst *image.RGBA) {
 		}
 	}
 	for _, s := range b.styles {
+		if !b.spend(len(s.entries)) {
+			return
+		}
 		var paths []polyline
 		for _, e := range s.entries {
 			paths = append(paths, e.paths...)
