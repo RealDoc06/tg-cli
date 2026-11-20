@@ -20,6 +20,7 @@ import (
 	"github.com/gotd/td/telegram/updates"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"github.com/RealDoc06/tg-cli/internal/config"
 	"github.com/RealDoc06/tg-cli/internal/core"
@@ -294,6 +295,23 @@ func (b *backend) Edit(ctx context.Context, chatID int64, msgID int, text string
 	}
 	_, err = b.sender.To(peer).Edit(msgID).Text(ctx, text)
 	return err
+}
+
+func (b *backend) Press(ctx context.Context, chatID int64, msgID int, data string) (core.BotAnswer, error) {
+	peer, err := b.peers.input(chatID)
+	if err != nil {
+		return core.BotAnswer{}, err
+	}
+	res, err := b.api.MessagesGetBotCallbackAnswer(ctx, &tg.MessagesGetBotCallbackAnswerRequest{
+		Peer: peer, MsgID: msgID, Data: []byte(data),
+	})
+	if tgerr.Is(err, "BOT_RESPONSE_TIMEOUT") {
+		return core.BotAnswer{}, nil // the bot got it, and may answer by editing its message
+	}
+	if err != nil {
+		return core.BotAnswer{}, err
+	}
+	return core.BotAnswer{Text: res.Message, URL: res.URL}, nil
 }
 
 func (b *backend) MarkRead(ctx context.Context, chatID int64, maxID int) error {

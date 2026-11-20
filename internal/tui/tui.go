@@ -67,7 +67,11 @@ type model struct {
 	// graphics is set when the terminal can draw pictures.
 	graphics bool
 	st       styles
-	spaced   bool // gaps between messages, see Look
+	look     Look
+	// save writes a change of the settings menu to config.json, nil when
+	// there is nowhere to save it.
+	save     func(change func(*Look)) error
+	settings *settingsMenu // the open settings menu, nil when there is none
 
 	width, height int
 	focus         focus
@@ -105,6 +109,9 @@ type model struct {
 	// drafts holds what was typed and not sent in the chats left since.
 	drafts map[int64]string
 	menu   *menu // the open context menu, nil when there is none
+	// presses counts bot buttons pressed, copies and chats opened: only the
+	// answer to the latest press, in the chat it was made in, is shown.
+	presses int
 
 	// images holds the pictures uploaded to the terminal. An entry with ID
 	// 0 is loading, or failed and shows as text.
@@ -223,6 +230,13 @@ type (
 		text string
 		err  error
 	}
+	// pressedMsg is a bot's answer to a pressed button. seq is presses when
+	// it was pressed.
+	pressedMsg struct {
+		seq    int
+		answer core.BotAnswer
+		err    error
+	}
 	editedMsg struct {
 		chatID int64
 		id     int
@@ -237,16 +251,18 @@ type (
 type Look struct {
 	Theme  string // one of Themes, "" for the default
 	Spaced bool   // a gap between messages of different senders or moments
+	Keys   string // "mac" or "pc" shortcut labels, "" for the system's
 }
 
 // Run starts the TUI and blocks until the user quits. account, when not
-// empty, is shown so it is clear whose chats these are.
-func Run(ctx context.Context, be core.Backend, version, account string, look Look) error {
+// empty, is shown so it is clear whose chats these are. save writes changes
+// made in the settings menu.
+func Run(ctx context.Context, be core.Backend, version, account string, look Look, save func(change func(*Look)) error) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	m := newModel(ctx, be, look.Theme)
-	m.spaced = look.Spaced
+	m := newModel(ctx, be, look)
+	m.save = save
 	m.version, m.account, m.graphics = version, account, termimg.Supported()
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	go func() {
@@ -272,17 +288,17 @@ func Run(ctx context.Context, be core.Backend, version, account string, look Loo
 	return err
 }
 
-// newModel sets up an empty model drawn with the named theme. A name that
-// is not a theme falls back to the default and says so.
-func newModel(ctx context.Context, be core.Backend, theme string) *model {
-	t, ok := FindTheme(theme)
+// newModel sets up an empty model drawn with look. A theme name that is not
+// a theme falls back to the default and says so.
+func newModel(ctx context.Context, be core.Backend, look Look) *model {
+	t, ok := FindTheme(look.Theme)
 	m := &model{
-		ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}, saving: map[int64]int{}, drafts: map[int64]string{},
+		ctx: ctx, be: be, look: look, histories: map[int64]*history{}, images: map[imageKey]shown{}, saving: map[int64]int{}, drafts: map[int64]string{},
 		jobs: make(chan struct{}, 3), freedAt: map[int]time.Time{}, uploading: map[int]bool{},
 	}
 	m.view, m.leave = context.WithCancel(ctx)
 	if !ok {
-		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", theme, strings.Join(ThemeNames(), ", "))
+		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", look.Theme, strings.Join(ThemeNames(), ", "))
 	}
 	m.st = newStyles(t)
 	m.input, m.filter = m.newInput("> "), m.newInput("/ ")
@@ -293,13 +309,17 @@ func (m *model) newInput(prompt string) textinput.Model {
 	in := textinput.New()
 	in.Prompt = prompt
 	in.SetVirtualCursor(false)
-	// Every color comes from the theme: the defaults assume a dark terminal.
+	m.paint(&in)
+	return in
+}
+
+// paint colors an input with the theme: the defaults assume a dark terminal.
+func (m *model) paint(in *textinput.Model) {
 	styles := in.Styles()
 	styles.Focused = textinput.StyleState{Text: m.st.text, Placeholder: m.st.muted, Suggestion: m.st.muted, Prompt: m.st.accent}
 	styles.Blurred = textinput.StyleState{Text: m.st.muted, Placeholder: m.st.muted, Suggestion: m.st.muted, Prompt: m.st.muted}
 	styles.Cursor.Color = m.st.theme.Accent
 	in.SetStyles(styles)
-	return in
 }
 
 // Init enters the alternate screen before anything else, then loads the
@@ -344,6 +364,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.key(msg)
 
 	case tea.MouseWheelMsg:
+		if m.settings != nil {
+			return nil
+		}
 		m.menu = nil
 		delta := 1
 		if msg.Button == tea.MouseWheelUp {
@@ -358,6 +381,16 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 
 	case tea.MouseClickMsg:
 		lw, _ := m.layout()
+		if m.settings != nil {
+			// A click on a setting changes it, anywhere else closes the menu.
+			x, y, w := m.settingsBox()
+			if i := msg.Y - y - 1; msg.Button == tea.MouseLeft && i >= 0 && i < len(settingsItems) && msg.X >= x && msg.X < x+w {
+				m.settings.sel = i
+				return m.changeSetting(1)
+			}
+			m.settings = nil
+			return nil
+		}
 		if m.menu != nil {
 			if i := msg.Y - m.menu.y; msg.Button == tea.MouseLeft && i >= 0 && i < len(m.menu.items) &&
 				msg.X >= m.menu.x && msg.X < m.menu.x+menuWidth(m.menu.items) {
@@ -369,7 +402,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 		}
-		if msg.Y < 1 || msg.Y >= m.height-1 {
+		if msg.Y < 1 || msg.Y >= m.bodyRows() {
 			return nil
 		}
 		if msg.Button == tea.MouseRight {
@@ -382,6 +415,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.X >= lw {
+			if cmd, ok := m.pressAt(msg.X, msg.Y); ok {
+				return cmd
+			}
 			return m.setFocus(focusInput)
 		}
 		if k := (msg.Y - 1) / chatStride; (msg.Y-1)%chatStride < 2 && k < m.chatsDrawn() && m.top+k < len(m.visible()) {
@@ -443,6 +479,30 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.addMessage(msg.msg, nil, false)
 		m.scroll = 0
 		return nil
+
+	case pressedMsg:
+		if msg.seq != m.presses {
+			return nil // another button or chat since, the answer would be mistaken for its
+		}
+		if msg.err != nil {
+			m.note = ""
+			if m.status == "" { // an error since, like a failed send, matters more
+				m.status = "the button failed: " + msg.err.Error()
+			}
+			return nil
+		}
+		text := strings.Join(strings.Fields(msg.answer.Text), " ")
+		if msg.answer.URL == "" {
+			if text != "" {
+				m.note = text
+			}
+			return nil
+		}
+		cmd := m.copy(msg.answer.URL, "the bot's link "+msg.answer.URL)
+		if text != "" {
+			m.note = text + ", link copied"
+		}
+		return cmd
 
 	case editedMsg:
 		if m.saving[msg.chatID]--; m.saving[msg.chatID] <= 0 {
@@ -601,7 +661,29 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	key := msg.String()
 	m.status, m.note = "", ""
 	if key == "ctrl+c" {
+		if m.focus == focusInput && m.composing() {
+			m.menu = nil
+			m.clearComposer()
+			return m.afterScroll()
+		}
 		return tea.Quit
+	}
+
+	if m.settings != nil {
+		n := len(settingsItems)
+		switch key {
+		case "up", "k", "shift+tab":
+			m.settings.sel = (m.settings.sel + n - 1) % n
+		case "down", "j", "tab":
+			m.settings.sel = (m.settings.sel + 1) % n
+		case "left", "h":
+			return m.changeSetting(-1)
+		case "right", "l", "enter", "space":
+			return m.changeSetting(1)
+		case "esc", "q":
+			m.settings = nil
+		}
+		return nil
 	}
 
 	if m.menu != nil {
@@ -653,6 +735,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		case "/":
 			return m.setFocus(focusFilter)
 		case "esc":
+			if m.filter.Value() == "" {
+				m.settings = &settingsMenu{}
+				return nil
+			}
 			m.filter.Reset()
 		case "enter", "right", "l":
 			return m.openSelected()
@@ -728,6 +814,24 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *model) attached() bool { return m.attach.File != "" || m.attach.Photo != nil }
+
+// composing reports whether the composer holds something ctrl+c would clear:
+// text, an attachment or an edit.
+func (m *model) composing() bool { return m.input.Value() != "" || m.attached() || m.editing != 0 }
+
+// clearComposer drops what is being written and any attachment. An edit is
+// cancelled, which gives back what the composer held before it. A reply
+// stays picked.
+func (m *model) clearComposer() {
+	if m.editing != 0 {
+		m.cancelDraft()
+	} else {
+		m.input.Reset()
+	}
+	if m.attached() || m.readingClipboard() {
+		m.setAttach(core.SendRequest{}) // also drops a clipboard read in progress
+	}
+}
 
 // savingNote asks to wait while an edit is saved in the open chat.
 const savingNote = "saving the edit, a moment"
@@ -924,8 +1028,44 @@ func (m *model) openMenu(x, y int) {
 		lw++ // the border
 	}
 	x = max(lw, min(x, m.width-menuWidth(items)))
-	y = max(0, min(y, m.height-1-len(items)))
+	y = max(0, min(y, m.bodyRows()-len(items)))
 	m.menu = &menu{msg: msg, items: items, x: x, y: y}
+}
+
+// pressAt presses the bot button drawn at screen cell x, y, and reports
+// whether there is one.
+func (m *model) pressAt(x, y int) (tea.Cmd, bool) {
+	line, msg, ok := m.lineAt(y)
+	if lw, _ := m.layout(); lw > 0 {
+		x -= lw + 1 // the chat list and the border
+	}
+	if i := slices.IndexFunc(line.keys, func(k key) bool { return x >= k.x && x < k.x+k.w }); ok && i >= 0 {
+		return m.press(msg, line.keys[i].button), true
+	}
+	return nil, false
+}
+
+// press acts on a button of msg's keyboard: a callback goes to the bot, whose
+// answer shows in the status line. Links are copied, the terminal may run
+// on another machine than the browser.
+func (m *model) press(msg core.Message, b core.Button) tea.Cmd {
+	m.status, m.note = "", "" // what an earlier button left
+	m.presses++
+	seq := m.presses
+	switch b.Kind {
+	case core.ButtonCallback:
+		m.note = "pressed " + strings.Join(strings.Fields(b.Text), " ")
+		return func() tea.Msg {
+			answer, err := m.be.Press(m.ctx, msg.ChatID, msg.ID, b.Value)
+			return pressedMsg{seq, answer, err}
+		}
+	case core.ButtonURL:
+		return m.copy(b.Value, "link "+b.Value)
+	case core.ButtonCopy:
+		return m.copy(b.Value, "text")
+	}
+	m.status = "this button only works in Telegram's own apps"
+	return nil
 }
 
 // editable reports whether the TUI offers to edit msg: the account sent it
@@ -956,6 +1096,7 @@ func (m *model) runMenu() tea.Cmd {
 // copy puts s on the clipboard with OSC 52, which also works over SSH.
 func (m *model) copy(s, what string) tea.Cmd {
 	m.note = "copied " + what
+	m.presses++ // a bot's link answered later must not replace it
 	return tea.SetClipboard(s)
 }
 
@@ -1393,6 +1534,7 @@ func (m *model) openSelected() tea.Cmd {
 		m.drafts[m.openID] = d
 	}
 	m.openID, m.scroll = chatID, 0
+	m.presses++
 	m.replyTo, m.editing, m.stash = 0, 0, nil
 	m.input.Reset()
 	m.input.SetValue(m.drafts[chatID])

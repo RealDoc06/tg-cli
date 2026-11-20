@@ -51,6 +51,14 @@ type fixture struct {
 	lines []string // "<minutes ago>|<sender, empty for self>|<text>"
 }
 
+// keyboards are the inline keyboards of the last message of bot chats.
+var keyboards = map[int64][][]core.Button{
+	104: {
+		{{Text: "@weather_demo_bot", Kind: core.ButtonCallback, Value: "edit:1"}, {Text: "@build_demo_bot", Kind: core.ButtonCallback, Value: "edit:2"}},
+		{{Text: "Bot API docs", Kind: core.ButtonURL, Value: "https://core.telegram.org/bots/api"}},
+	},
+}
+
 var fixtures = []fixture{
 	{core.Chat{ID: 101, Kind: core.KindUser, Title: "Alice Rossi", Username: "alice", Unread: 2, Pinned: true, PhotoID: 1}, []string{
 		"190|Alice Rossi|hey, are we still on for tomorrow?",
@@ -97,8 +105,8 @@ var fixtures = []fixture{
 		"340|Papà|[photo]",
 	}},
 	{core.Chat{ID: 104, Kind: core.KindBot, Title: "BotFather", Username: "BotFather", PhotoID: 6}, []string{
-		"8000||/newbot",
-		"7999|BotFather|Alright, a new bot. How are we going to call it?",
+		"8000||/mybots",
+		"7999|BotFather|Choose a bot from the list below:",
 	}},
 	{core.Chat{ID: 1000, Kind: core.KindUser, Title: "Saved Messages"}, []string{
 		"9000||wifi guest password: correct horse battery staple",
@@ -143,6 +151,7 @@ func New() *Backend {
 		}
 		chat := f.chat
 		msgs := b.messages[chat.ID]
+		msgs[len(msgs)-1].Buttons = keyboards[chat.ID]
 		chat.Last = &msgs[len(msgs)-1]
 		b.chats = append(b.chats, chat)
 	}
@@ -267,6 +276,24 @@ func (b *Backend) Edit(_ context.Context, chatID int64, msgID int, text string) 
 		chat.Last = &msgs[i]
 	}
 	return nil
+}
+
+// Press answers with the label of the button, as a bot would with a notice.
+func (b *Backend) Press(_ context.Context, chatID int64, msgID int, data string) (core.BotAnswer, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	i := slices.IndexFunc(b.messages[chatID], func(m core.Message) bool { return m.ID == msgID })
+	if i < 0 {
+		return core.BotAnswer{}, fmt.Errorf("no message %d in chat %d", msgID, chatID)
+	}
+	for _, row := range b.messages[chatID][i].Buttons {
+		for _, button := range row {
+			if button.Kind == core.ButtonCallback && button.Value == data {
+				return core.BotAnswer{Text: "Editing " + button.Text}, nil
+			}
+		}
+	}
+	return core.BotAnswer{}, fmt.Errorf("message %d has no such button", msgID)
 }
 
 func (b *Backend) MarkRead(_ context.Context, chatID int64, _ int) error {

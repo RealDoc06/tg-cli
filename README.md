@@ -121,14 +121,16 @@ Run `tg` with no arguments.
 | `↑` `↓` `j` `k` | Move in the chat list |
 | `enter` | Open the chat, or send the message |
 | `/` | Filter chats by name |
-| `tab` `esc` | Switch between chat list and composer |
+| `tab` | Switch between chat list and composer, `esc` goes back to the list |
 | `pgup` `pgdn` | Scroll the conversation, older messages load as you go |
-| `ctrl+↑` `ctrl+↓` | Pick the message to reply to (`alt` works too) |
+| `ctrl+↑` `ctrl+↓` | Pick the message to reply to (`alt` works too, use it on a Mac) |
 | `↑` | In an empty composer, edit your last message |
 | `esc` | Cancel the reply or the edit |
-| `ctrl+v` | Attach the image in the clipboard, the message becomes its caption |
+| `ctrl+v` (`cmd+v` on a Mac) | Attach the image in the clipboard, the message becomes its caption |
 | `backspace` | Remove the attachment, when the message is empty |
-| `q` `ctrl+c` | Quit |
+| `ctrl+c` | Clear the composer or cancel the edit, quit when it is empty |
+| `esc` | In the chat list, open the settings: theme, spacing, how shortcuts are written |
+| `q` | Quit, from the chat list |
 
 The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages the composer cannot hold as they are (several lines, special characters) are edited elsewhere. New messages arrive live. What you type and leave unsent stays with its chat, shown in the list as a `[draft]`.
 
@@ -143,6 +145,10 @@ To send a picture, copy it and paste it into the composer, or press `ctrl+v`, or
 `tg config theme <name>` picks the colors: the Catppuccin flavors `mocha` (the default), `macchiato`, `frappe` and `latte`, or Telegram's `dark` and `light`. `tg config theme` lists them. The theme paints the terminal's background while tg runs, and is stored as `"theme"` in `config.json`.
 
 `tg config spacing on` sets messages apart in the conversation: a blank line before a new sender, a pause of more than five minutes, or a new day. Off, the default, packs them together. It is stored as `"spaced_messages"` in `config.json`.
+
+Both can also be changed in the settings, with `esc` from the chat list. There "Shortcuts" picks how keys are written: `⌘V` and `⌥↑↓` on a Mac, `ctrl+v` and `ctrl+↑↓` elsewhere. It follows the system tg runs on, so over SSH from a Mac set it once. It is stored as `"keys"` in `config.json`.
+
+Bots' inline buttons are drawn under their messages. Click one to press it, the bot's answer shows at the bottom. A link button copies its link. Buttons that need Telegram's own apps, like games and payments, say so.
 
 ### Pictures
 
