@@ -255,7 +255,7 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 			b.messages[chatID] = append(b.messages[chatID], reply)
 			chat, _ := b.chat(chatID)                    // b.chats may have moved since
 			chat.ReadOutbox = max(chat.ReadOutbox, m.ID) // read before answering
-			read := core.Event{Kind: core.EventRead, Chat: *chat}
+			read := core.Event{Kind: core.EventRead, Chat: core.Chat{ID: chatID, ReadOutbox: chat.ReadOutbox}}
 			ev := core.Event{Kind: core.EventMessage, Chat: *chat, Message: reply}
 			b.mu.Unlock()
 			for _, ev := range []core.Event{read, ev} {
