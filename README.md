@@ -123,17 +123,21 @@ Run `tg` with no arguments.
 | `/` | Filter chats by name |
 | `tab` `esc` | Switch between chat list and composer |
 | `pgup` `pgdn` | Scroll the conversation, older messages load as you go |
+| `ctrl+v` | Attach the image in the clipboard, the message becomes its caption |
+| `backspace` | Remove the attachment, when the message is empty |
 | `q` `ctrl+c` | Quit |
 
 The mouse works too: click a chat, scroll either pane. New messages arrive live.
+
+To send a picture, copy it and press `ctrl+v` in the composer, or drop the file on the terminal, which pastes its path. Reading the clipboard uses `osascript` on macOS, PowerShell on Windows, and `wl-paste` or `xclip` on Linux. Over SSH it would read the remote machine's clipboard, so drop or paste a file path there instead.
 
 ### Themes
 
 `tg config theme <name>` picks the colors: the Catppuccin flavors `mocha` (the default), `macchiato`, `frappe` and `latte`, or Telegram's `dark` and `light`. `tg config theme` lists them. The theme paints the terminal's background while tg runs, and is stored as `"theme"` in `config.json`.
 
-### Profile pictures
+### Pictures
 
-Real profile pictures are drawn in terminals that implement the Kitty graphics protocol with Unicode placeholders: [Kitty](https://sw.kovidgoyal.net/kitty/) and [Ghostty](https://ghostty.org). Elsewhere each chat gets a colored badge with its initials. Inside tmux, pictures need `set -g allow-passthrough on`. Force them on or off with `TG_IMAGES=1` or `TG_IMAGES=0`.
+Profile pictures and photos in conversations are drawn in terminals that implement the Kitty graphics protocol with Unicode placeholders: [Kitty](https://sw.kovidgoyal.net/kitty/) and [Ghostty](https://ghostty.org). Elsewhere each chat gets a colored badge with its initials, and photos show as `[photo]`. Inside tmux, pictures need `set -g allow-passthrough on`. Force them on or off with `TG_IMAGES=1` or `TG_IMAGES=0`.
 
 ## Updates
 
@@ -154,7 +158,7 @@ Set `TG_NO_AUTOUPDATE=1` to turn the background check off.
 | `TG_ACCOUNT` | Account to act as, instead of the default one |
 | `TG_API_ID`, `TG_API_HASH` | Telegram API credentials, instead of the saved ones |
 | `TG_DEMO=1` | Run everything against built in sample chats, no account needed. Uses its own directory, never your real configuration |
-| `TG_IMAGES=0\|1` | Force profile pictures off or on |
+| `TG_IMAGES=0\|1` | Force pictures off or on |
 | `TG_NO_AUTOUPDATE=1` | Disable background updates |
 | `TG_NO_LOG=1` | Do not record commands in `log.jsonl` |
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/RealDoc06/tg-cli/internal/clipboard"
 	"github.com/RealDoc06/tg-cli/internal/core"
 	"github.com/RealDoc06/tg-cli/internal/termimg"
 )
@@ -25,6 +27,8 @@ const (
 	avatarCols  = 4
 	avatarRows  = 2
 	avatarPx    = 96
+	photoCols   = 36 // largest photo in a conversation, in cells
+	photoRows   = 14
 	narrowWidth = 70 // below this only one pane is shown at a time
 )
 
@@ -49,8 +53,9 @@ type model struct {
 	be      core.Backend
 	version string
 	account string // shown in the status line when not empty
-	images  bool
-	st      styles
+	// graphics is set when the terminal can draw pictures.
+	graphics bool
+	st       styles
 
 	width, height int
 	focus         focus
@@ -66,13 +71,28 @@ type model struct {
 
 	input  textinput.Model
 	filter textinput.Model
+	// attach is the picture or file pasted into the composer, sent with the
+	// next message. Its Text is unused.
+	attach core.SendRequest
 
-	// avatars maps chat ID to an uploaded image ID, 0 while it is loading.
-	avatars   map[int64]int
+	// images holds the pictures uploaded to the terminal. An entry with ID
+	// 0 is loading, or failed and shows as text.
+	images    map[imageKey]shown
 	lastImage int
 
 	status string
 }
+
+// imageKey names a picture: the photo of a message, or the avatar of a chat
+// when msg is 0.
+type imageKey struct {
+	chat int64
+	msg  int
+}
+
+// shown is a picture uploaded to the terminal as image id, drawn over a
+// cols x rows cell area.
+type shown struct{ id, cols, rows int }
 
 type (
 	chatsMsg struct {
@@ -89,9 +109,22 @@ type (
 		msg core.Message
 		err error
 	}
-	avatarMsg struct {
-		chatID int64
-		png    []byte
+	// imageMsg carries a picture ready to upload, png is nil when it could
+	// not be loaded.
+	imageMsg struct {
+		key        imageKey
+		png        []byte
+		cols, rows int
+	}
+	// uploadedMsg follows the upload of a picture to the terminal.
+	uploadedMsg struct {
+		key imageKey
+		img shown
+	}
+	// clipboardMsg carries an image read from the system clipboard.
+	clipboardMsg struct {
+		png []byte
+		err error
 	}
 	errMsg   struct{ err error }
 	eventMsg core.Event
@@ -105,7 +138,7 @@ func Run(ctx context.Context, be core.Backend, version, account, theme string) e
 	defer cancel()
 
 	m := newModel(ctx, be, theme)
-	m.version, m.account, m.images = version, account, termimg.Supported()
+	m.version, m.account, m.graphics = version, account, termimg.Supported()
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	go func() {
 		if err := be.Watch(ctx, func(ev core.Event) { p.Send(eventMsg(ev)) }); err != nil && ctx.Err() == nil {
@@ -115,8 +148,8 @@ func Run(ctx context.Context, be core.Backend, version, account, theme string) e
 	_, err := p.Run()
 
 	if ids := slices.Collect(func(yield func(int) bool) {
-		for _, id := range m.avatars {
-			if id != 0 && !yield(id) {
+		for _, img := range m.images {
+			if img.id != 0 && !yield(img.id) {
 				return
 			}
 		}
@@ -133,7 +166,7 @@ func Run(ctx context.Context, be core.Backend, version, account, theme string) e
 // is not a theme falls back to the default and says so.
 func newModel(ctx context.Context, be core.Backend, theme string) *model {
 	t, ok := FindTheme(theme)
-	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, avatars: map[int64]int{}}
+	m := &model{ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}}
 	if !ok {
 		m.status = fmt.Sprintf("no theme %q, pick one of %s with `tg config theme <name>`", theme, strings.Join(ThemeNames(), ", "))
 	}
@@ -157,14 +190,21 @@ func (m *model) newInput(prompt string) textinput.Model {
 
 func (m *model) Init() tea.Cmd { return m.loadChats(nil) }
 
+// Update handles a message, then fetches the photos that came into view,
+// whatever moved them there.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	cmd := m.update(msg)
+	return m, tea.Batch(cmd, m.loadPhotos())
+}
+
+func (m *model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		return m, m.afterMove()
+		return m.afterMove()
 
 	case tea.KeyPressMsg:
-		return m, m.key(msg)
+		return m.key(msg)
 
 	case tea.MouseWheelMsg:
 		delta := 1
@@ -173,29 +213,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if lw, _ := m.layout(); msg.X < lw {
 			m.sel += delta
-			return m, m.afterMove()
+			return m.afterMove()
 		}
 		m.scroll -= delta * 3
-		return m, m.afterScroll()
+		return m.afterScroll()
 
 	case tea.MouseClickMsg:
 		lw, _ := m.layout()
 		if msg.Button != tea.MouseLeft || msg.Y < 1 || msg.Y >= m.height-1 {
-			return m, nil
+			return nil
 		}
 		if msg.X >= lw {
-			return m, m.setFocus(focusInput)
+			return m.setFocus(focusInput)
 		}
 		if i := m.top + (msg.Y-1)/2; i < len(m.visible()) {
 			m.sel = i
-			return m, m.openSelected()
+			return m.openSelected()
 		}
-		return m, nil
+		return nil
 
 	case chatsMsg:
 		if msg.err != nil {
 			m.status = msg.err.Error()
-			return m, nil
+			return nil
 		}
 		before := len(m.chats)
 		for _, c := range msg.chats {
@@ -208,62 +248,84 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.chatsDone {
 			cmds = append(cmds, m.loadChats(&m.chats[len(m.chats)-1]))
 		}
-		return m, tea.Batch(cmds...)
+		return tea.Batch(cmds...)
 
 	case historyMsg:
 		h := m.histories[msg.chatID]
 		h.loading = false
 		if msg.err != nil {
 			m.status = msg.err.Error()
-			return m, nil
+			return nil
 		}
 		h.loaded = true
 		if msg.older {
 			h.done = len(msg.msgs) < historyPage
 			h.msgs = append(msg.msgs, h.msgs...)
-			return m, nil
+			return nil
 		}
 		h.done = len(msg.msgs) < historyPage
 		h.msgs = msg.msgs
-		return m, m.markRead(msg.chatID)
+		return m.markRead(msg.chatID)
 
 	case sentMsg:
 		if msg.err != nil {
 			m.status = "send failed: " + msg.err.Error()
-			return m, nil
+			return nil
 		}
 		m.addMessage(msg.msg, nil)
 		m.scroll = 0
-		return m, nil
+		return nil
 
 	case eventMsg:
 		ev := core.Event(msg)
 		if ev.Kind == core.EventReady {
-			return m, nil
+			return nil
 		}
 		m.addMessage(ev.Message, &ev.Chat)
 		cmds := []tea.Cmd{m.afterMove()}
 		if ev.Message.ChatID == m.openID && !ev.Message.Out {
 			cmds = append(cmds, m.markRead(m.openID))
 		}
-		return m, tea.Batch(cmds...)
+		return tea.Batch(cmds...)
 
-	case avatarMsg:
+	case imageMsg:
 		if msg.png == nil {
-			return m, nil // stays 0, initials are shown
+			return nil // stays 0, initials or "[photo]" are shown
 		}
 		m.lastImage = m.lastImage%termimg.MaxID + 1
-		for chatID, id := range m.avatars {
-			if id == m.lastImage {
-				delete(m.avatars, chatID) // ID is being reused
+		for key, img := range m.images {
+			if img.id == m.lastImage {
+				delete(m.images, key) // ID is being reused, it reloads if seen again
 			}
 		}
-		m.avatars[msg.chatID] = m.lastImage
-		return m, tea.Raw(termimg.Transmit(m.lastImage, avatarCols, avatarRows, msg.png))
+		// The picture is shown only once it reached the terminal: placeholder
+		// cells drawn before their image may stay blank.
+		img := shown{m.lastImage, msg.cols, msg.rows}
+		return tea.Sequence(
+			tea.Raw(termimg.Transmit(img.id, img.cols, img.rows, msg.png)),
+			func() tea.Msg { return uploadedMsg{msg.key, img} },
+		)
+
+	case uploadedMsg:
+		m.images[msg.key] = msg.img
+		return nil
+
+	case clipboardMsg:
+		if msg.err != nil {
+			m.status = msg.err.Error()
+			return nil
+		}
+		m.attach = core.SendRequest{Photo: msg.png}
+		return nil
+
+	case tea.PasteMsg:
+		if m.focus == focusInput {
+			return m.paste(msg.Content)
+		}
 
 	case errMsg:
 		m.status = msg.err.Error()
-		return m, nil
+		return nil
 	}
 
 	// Everything else (paste, cursor blink) belongs to the focused input.
@@ -274,7 +336,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case focusFilter:
 		m.filter, cmd = m.filter.Update(msg)
 	}
-	return m, cmd
+	return cmd
 }
 
 func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
@@ -354,15 +416,24 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		case "pgdown":
 			m.scroll -= m.messageRows() / 2
 			return m.afterScroll()
+		case "ctrl+v":
+			return m.pasteImage
+		case "backspace":
+			if m.input.Value() == "" && m.attached() {
+				m.attach = core.SendRequest{}
+				return nil
+			}
 		case "enter":
-			text := strings.TrimSpace(m.input.Value())
-			if text == "" {
+			req := m.attach
+			req.Text = strings.TrimSpace(m.input.Value())
+			if req.Text == "" && !m.attached() {
 				return nil
 			}
 			m.input.Reset()
+			m.attach = core.SendRequest{}
 			chatID := m.openID
 			return func() tea.Msg {
-				sent, err := m.be.Send(m.ctx, chatID, core.SendRequest{Text: text})
+				sent, err := m.be.Send(m.ctx, chatID, req)
 				return sentMsg{sent, err}
 			}
 		}
@@ -370,6 +441,48 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.input, cmd = m.input.Update(msg)
 		return cmd
 	}
+}
+
+func (m *model) attached() bool { return m.attach.File != "" || m.attach.Photo != nil }
+
+// paste handles text pasted into the composer. The path of an image, which
+// is what dropping a file on the terminal pastes, attaches it. An empty paste
+// is what some terminals send when the clipboard holds only an image.
+func (m *model) paste(text string) tea.Cmd {
+	if strings.TrimSpace(text) == "" {
+		return m.pasteImage
+	}
+	if path, ok := imagePath(text); ok {
+		m.attach = core.SendRequest{File: path}
+		return nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(tea.PasteMsg{Content: text})
+	return cmd
+}
+
+// pasteImage reads an image from the system clipboard, for terminals that
+// only paste text.
+func (m *model) pasteImage() tea.Msg {
+	data, err := clipboard.Image(m.ctx)
+	return clipboardMsg{data, err}
+}
+
+// imagePath reports whether pasted text is the path of one image file. File
+// managers and terminals paste it as a file:// URL, quoted, or with spaces
+// escaped by backslashes, so each reading is tried.
+func imagePath(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	candidates := []string{text, strings.Trim(text, `'"`), strings.ReplaceAll(text, `\`, "")}
+	if u, err := url.Parse(text); err == nil && u.Scheme == "file" {
+		candidates = append(candidates, u.Path)
+	}
+	for _, path := range candidates {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && core.IsPhotoFile(path) {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 func (m *model) setFocus(f focus) tea.Cmd {
@@ -417,23 +530,61 @@ func (m *model) afterMove() tea.Cmd {
 	if m.sel >= m.top+rows {
 		m.top = m.sel - rows + 1
 	}
-	if !m.images {
+	if !m.graphics {
 		return nil
 	}
 	var cmds []tea.Cmd
 	for _, c := range chats[m.top:min(len(chats), m.top+rows)] {
-		if _, seen := m.avatars[c.ID]; seen || c.PhotoID == 0 {
+		key := imageKey{chat: c.ID}
+		if _, seen := m.images[key]; seen || c.PhotoID == 0 {
 			continue
 		}
-		m.avatars[c.ID] = 0
+		m.images[key] = shown{}
 		chat := *c
 		cmds = append(cmds, func() tea.Msg {
 			data, err := m.be.Avatar(m.ctx, chat)
 			if err != nil {
-				return avatarMsg{chatID: chat.ID}
+				return imageMsg{key: key}
 			}
 			png, _ := termimg.Avatar(data, avatarPx)
-			return avatarMsg{chat.ID, png}
+			return imageMsg{key, png, avatarCols, avatarRows}
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+// loadPhotos requests the photos of the messages on screen in the open chat,
+// sized to fit the conversation pane as it is now.
+func (m *model) loadPhotos() tea.Cmd {
+	h := m.histories[m.openID]
+	_, rw := m.layout()
+	if !m.graphics || h == nil || rw == 0 {
+		return nil
+	}
+	lines := m.messageLines(h, rw)
+	end := max(0, len(lines)-m.scroll)
+	maxCols := min(photoCols, rw-photoIndent-1)
+	var cmds []tea.Cmd
+	for _, l := range lines[max(0, end-m.messageRows()):end] {
+		if l.msg < 0 || h.msgs[l.msg].Media != core.MediaPhoto {
+			continue
+		}
+		msg := h.msgs[l.msg]
+		key := imageKey{msg.ChatID, msg.ID}
+		if _, seen := m.images[key]; seen {
+			continue
+		}
+		m.images[key] = shown{}
+		cmds = append(cmds, func() tea.Msg {
+			data, err := m.be.Photo(m.ctx, key.chat, key.msg)
+			if err != nil {
+				return imageMsg{key: key}
+			}
+			png, cols, rows, err := termimg.Fit(data, maxCols, photoRows)
+			if err != nil {
+				return imageMsg{key: key}
+			}
+			return imageMsg{key, png, cols, rows}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -469,6 +620,7 @@ func (m *model) openSelected() tea.Cmd {
 	chatID := chats[m.sel].ID
 	m.openID, m.scroll = chatID, 0
 	m.input.Reset()
+	m.attach = core.SendRequest{} // it was meant for the previous chat
 	cmds := []tea.Cmd{m.setFocus(focusInput)}
 	if h := m.histories[chatID]; h == nil {
 		m.histories[chatID] = &history{loading: true}

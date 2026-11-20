@@ -40,8 +40,9 @@ type backend struct {
 	gaps *updates.Manager
 	// onEvent receives live updates once Watch is running.
 	onEvent atomic.Pointer[func(core.Event)]
-	// avatarSlots bounds concurrent profile photo downloads.
-	avatarSlots chan struct{}
+	// imageSlots bounds concurrent downloads of profile pictures and photos
+	// shown in the TUI.
+	imageSlots chan struct{}
 }
 
 func (b *backend) Self() core.User { return b.self }
@@ -261,23 +262,23 @@ func (b *backend) Send(ctx context.Context, chatID int64, req core.SendRequest) 
 	}
 
 	sent := core.Message{ChatID: chatID, FromID: b.self.ID, From: b.self.Name, Out: true, Text: req.Text, ReplyTo: req.ReplyTo}
+	var caption []styling.StyledTextOption
+	if req.Text != "" {
+		caption = append(caption, styling.Plain(req.Text))
+	}
 	var res tg.UpdatesClass
-	if req.File == "" {
+	switch {
+	case req.Photo != nil:
+		sent.Media = core.MediaPhoto
+		res, err = builder.Upload(message.FromBytes("photo.png", req.Photo)).Photo(ctx, caption...)
+	case req.File == "":
 		res, err = builder.Text(ctx, req.Text)
-	} else {
-		upload := builder.Upload(message.FromPath(req.File))
-		var caption []styling.StyledTextOption
-		if req.Text != "" {
-			caption = append(caption, styling.Plain(req.Text))
-		}
-		switch strings.ToLower(filepath.Ext(req.File)) {
-		case ".jpg", ".jpeg", ".png", ".webp":
-			sent.Media = "photo"
-			res, err = upload.Photo(ctx, caption...)
-		default:
-			sent.Media = "file: " + filepath.Base(req.File)
-			res, err = upload.File(ctx, caption...)
-		}
+	case core.IsPhotoFile(req.File):
+		sent.Media = core.MediaPhoto
+		res, err = builder.Upload(message.FromPath(req.File)).Photo(ctx, caption...)
+	default:
+		sent.Media = "file: " + filepath.Base(req.File)
+		res, err = builder.Upload(message.FromPath(req.File)).File(ctx, caption...)
 	}
 	if sent.ID, err = unpack.MessageID(res, err); err != nil {
 		return core.Message{}, err
@@ -371,27 +372,80 @@ func (b *backend) Avatar(ctx context.Context, chat core.Chat) ([]byte, error) {
 		return nil, err
 	}
 
+	data, err := b.fetchImage(ctx, &tg.InputPeerPhotoFileLocation{Peer: peer, PhotoID: chat.PhotoID})
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+		_ = os.WriteFile(path, data, 0o600) // the cache is best effort
+	}
+	return data, nil
+}
+
+// photoDisplaySize is the smallest side, in pixels, Photo looks for: enough
+// for a sharp picture across half a terminal on a high density screen.
+const photoDisplaySize = 800
+
+func (b *backend) Photo(ctx context.Context, chatID int64, msgID int) ([]byte, error) {
+	media, err := b.media(ctx, chatID, msgID)
+	if err != nil {
+		return nil, err
+	}
+	m, ok := media.(*tg.MessageMediaPhoto)
+	if !ok {
+		return nil, fmt.Errorf("message %d has no photo", msgID)
+	}
+	photo, ok := m.Photo.(*tg.Photo)
+	if !ok {
+		return nil, errors.New("photo is no longer available")
+	}
+	return b.fetchImage(ctx, photoLocation(photo, photoDisplaySize))
+}
+
+// fetchImage downloads a small file into memory, a few at a time.
+func (b *backend) fetchImage(ctx context.Context, location tg.InputFileLocationClass) ([]byte, error) {
 	select {
-	case b.avatarSlots <- struct{}{}:
-		defer func() { <-b.avatarSlots }()
+	case b.imageSlots <- struct{}{}:
+		defer func() { <-b.imageSlots }()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 	var buf bytes.Buffer
-	location := &tg.InputPeerPhotoFileLocation{Peer: peer, PhotoID: chat.PhotoID}
 	if _, err := b.client.Download(location).Stream(ctx, &buf); err != nil {
 		return nil, err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
-		_ = os.WriteFile(path, buf.Bytes(), 0o600) // the cache is best effort
 	}
 	return buf.Bytes(), nil
 }
 
-func (b *backend) Download(ctx context.Context, chatID int64, msgID int, dir string) (string, error) {
+// photoLocation picks the smallest size of a photo whose longest side reaches
+// want pixels, or the largest one when none does. want 0 means the largest.
+// Sizes are listed from small to large.
+func photoLocation(photo *tg.Photo, want int) *tg.InputPhotoFileLocation {
+	var size string
+	for _, s := range photo.Sizes {
+		var typ string
+		var w, h int
+		switch s := s.(type) {
+		case *tg.PhotoSize:
+			typ, w, h = s.Type, s.W, s.H
+		case *tg.PhotoSizeProgressive:
+			typ, w, h = s.Type, s.W, s.H
+		default:
+			continue // stripped and cached sizes are inlined thumbnails
+		}
+		size = typ
+		if want > 0 && max(w, h) >= want {
+			break
+		}
+	}
+	return &tg.InputPhotoFileLocation{ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference, ThumbSize: size}
+}
+
+// media fetches the attachment of one message.
+func (b *backend) media(ctx context.Context, chatID int64, msgID int) (tg.MessageMediaClass, error) {
 	peer, err := b.peers.input(chatID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	ids := []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}}
 	var res tg.MessagesMessagesClass
@@ -403,36 +457,34 @@ func (b *backend) Download(ctx context.Context, chatID int64, msgID int, dir str
 		res, err = b.api.MessagesGetMessages(ctx, ids)
 	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	page, ok := res.AsModified()
 	if !ok || len(page.GetMessages()) == 0 {
-		return "", fmt.Errorf("message %d not found", msgID)
+		return nil, fmt.Errorf("message %d not found", msgID)
 	}
 	msg, ok := page.GetMessages()[0].(*tg.Message)
 	if !ok {
-		return "", fmt.Errorf("message %d not found", msgID)
+		return nil, fmt.Errorf("message %d not found", msgID)
+	}
+	return msg.Media, nil
+}
+
+func (b *backend) Download(ctx context.Context, chatID int64, msgID int, dir string) (string, error) {
+	media, err := b.media(ctx, chatID, msgID)
+	if err != nil {
+		return "", err
 	}
 
 	var location tg.InputFileLocationClass
 	var name string
-	switch media := msg.Media.(type) {
+	switch media := media.(type) {
 	case *tg.MessageMediaPhoto:
 		photo, ok := media.Photo.(*tg.Photo)
 		if !ok {
 			return "", errors.New("photo is no longer available")
 		}
-		// The last size is the largest one.
-		var size string
-		for _, s := range photo.Sizes {
-			switch s := s.(type) {
-			case *tg.PhotoSize:
-				size = s.Type
-			case *tg.PhotoSizeProgressive:
-				size = s.Type
-			}
-		}
-		location = &tg.InputPhotoFileLocation{ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference, ThumbSize: size}
+		location = photoLocation(photo, 0)
 		name = fmt.Sprintf("photo_%d.jpg", msgID)
 	case *tg.MessageMediaDocument:
 		doc, ok := media.Document.(*tg.Document)

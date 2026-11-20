@@ -1,8 +1,14 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image"
+	"image/png"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +45,27 @@ func open(t *testing.T, m *model, i int) {
 		t.Fatal(err)
 	}
 	m.Update(historyMsg{chatID: m.openID, msgs: msgs})
+}
+
+// upload runs the commands that load and upload pictures, and only those.
+func upload(m *model, cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	switch msg := msg.(type) {
+	case imageMsg, uploadedMsg:
+		upload(m, m.update(msg))
+		return
+	}
+	// Batches and sequences are lists of commands.
+	if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice {
+		for i := range v.Len() {
+			if c, ok := v.Index(i).Interface().(tea.Cmd); ok {
+				upload(m, c)
+			}
+		}
+	}
 }
 
 // Every rendered row must be exactly as wide as the terminal: a longer one
@@ -131,5 +158,73 @@ func TestLongErrorIsShown(t *testing.T) {
 	rows := strings.Split(m.View().Content, "\n")
 	if last := ansi.Strip(rows[len(rows)-1]); !strings.Contains(last, `account "work" is read-only`) {
 		t.Errorf("status line: %q", last)
+	}
+}
+
+// A loaded photo is drawn in place of its "[photo]" label, as placeholder
+// cells that keep every row at the width of the terminal.
+func TestPhotoIsDrawnInTheConversation(t *testing.T) {
+	m := loaded(t, 120, 30)
+	m.graphics = true
+	open(t, m, 1) // Homelab, with one photo
+	m.images = map[imageKey]shown{}
+	upload(m, m.loadPhotos())
+
+	var photo shown
+	for key, img := range m.images {
+		if key.msg != 0 {
+			photo = img
+		}
+	}
+	if photo.id == 0 || photo.cols > photoCols || photo.rows > photoRows {
+		t.Fatalf("photo is %+v", photo)
+	}
+	rows := strings.Split(m.View().Content, "\n")
+	drawn := 0
+	for i, row := range rows {
+		if strings.ContainsRune(row, '\U0010EEEE') {
+			drawn++
+		}
+		if w := ansi.StringWidth(row); w != 120 {
+			t.Errorf("row %d is %d cells", i, w)
+		}
+	}
+	if drawn != photo.rows {
+		t.Errorf("%d rows hold the photo, want %d", drawn, photo.rows)
+	}
+	if strings.Contains(ansi.Strip(m.View().Content), "Marco: [photo]") {
+		t.Error("the label is still shown next to the photo")
+	}
+}
+
+// Dropping an image on the terminal pastes its path, escaped like a shell
+// word. It must attach the image, and enter must send it with the caption.
+func TestPastedImagePathIsSentAsPhoto(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "my photo.png")
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewNRGBA(image.Rect(0, 0, 4, 4))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	m.Update(tea.PasteMsg{Content: strings.ReplaceAll(path, " ", `\ `)})
+	if m.attach.File != path || m.input.Value() != "" {
+		t.Fatalf("attached %q, input %q", m.attach.File, m.input.Value())
+	}
+	for _, r := range "look" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	m.update(m.key(tea.KeyPressMsg{Code: tea.KeyEnter})())
+
+	h := m.histories[m.openID].msgs
+	if last := h[len(h)-1]; last.Text != "look" || last.Media != core.MediaPhoto {
+		t.Errorf("sent %q with media %q", last.Text, last.Media)
+	}
+	if m.attached() {
+		t.Error("the attachment is still there after sending")
 	}
 }

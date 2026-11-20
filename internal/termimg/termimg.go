@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/jpeg" // profile photos are JPEG
+	_ "image/jpeg" // Telegram serves photos as JPEG
 	"image/png"
 	"os"
 	"strings"
@@ -43,11 +43,21 @@ const MaxID = 255
 const placeholder = '\U0010EEEE'
 
 // diacritics encode row and column numbers of placeholder cells, as listed in
-// the Kitty graphics protocol. Only the first entries are needed for avatars.
+// the Kitty graphics protocol. Their count bounds the size of an image in
+// cells, see MaxCells.
 var diacritics = []rune{
 	0x0305, 0x030D, 0x030E, 0x0310, 0x0312, 0x033D, 0x033E, 0x033F,
 	0x0346, 0x034A, 0x034B, 0x034C, 0x0350, 0x0351, 0x0352, 0x0357,
+	0x035B, 0x0363, 0x0364, 0x0365, 0x0366, 0x0367, 0x0368, 0x0369,
+	0x036A, 0x036B, 0x036C, 0x036D, 0x036E, 0x036F, 0x0483, 0x0484,
+	0x0485, 0x0486, 0x0487, 0x0592, 0x0593, 0x0594, 0x0595, 0x0597,
+	0x0598, 0x0599, 0x059C, 0x059D, 0x059E, 0x059F, 0x05A0, 0x05A1,
+	0x05A8, 0x05A9, 0x05AB, 0x05AC, 0x05AF, 0x05C4, 0x0610, 0x0611,
+	0x0612, 0x0613, 0x0614, 0x0615, 0x0616, 0x0617, 0x0657, 0x0658,
 }
+
+// MaxCells is the most columns or rows an image can span.
+var MaxCells = len(diacritics)
 
 // Placeholder returns the text lines that display image id over a cols x rows
 // cell area. Every cell is fully addressed so partial redraws stay correct.
@@ -140,6 +150,48 @@ func Avatar(data []byte, size int) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// Cell proportions assumed when sizing pictures: terminal cells are about
+// twice as tall as wide. cellPx is the width kept per column, enough to stay
+// sharp on high density screens.
+const (
+	cellAspect = 2
+	cellPx     = 16
+)
+
+// Fit decodes an image and sizes it to the largest cols x rows cell area
+// within maxCols x maxRows that keeps its proportions. It returns PNG data
+// scaled down for that area, ready for Transmit.
+func Fit(data []byte, maxCols, maxRows int) (pngData []byte, cols, rows int, err error) {
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	b := src.Bounds()
+	if b.Empty() {
+		return nil, 0, 0, fmt.Errorf("image is empty")
+	}
+	maxCols, maxRows = min(maxCols, MaxCells), min(maxRows, MaxCells)
+	// Height in cells per column of width.
+	ratio := float64(b.Dy()) / float64(b.Dx()) / cellAspect
+	cols = maxCols
+	rows = int(float64(cols)*ratio + 0.5)
+	if rows > maxRows {
+		rows = maxRows
+		cols = int(float64(rows)/ratio + 0.5)
+	}
+	cols, rows = max(1, min(cols, maxCols)), max(1, rows)
+
+	w := min(b.Dx(), cols*cellPx)
+	h := max(1, int(float64(w)*float64(b.Dy())/float64(b.Dx())+0.5))
+	dst := image.NewNRGBA(image.Rect(0, 0, w, h))
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, b, draw.Src, nil)
+	var out bytes.Buffer
+	if err := png.Encode(&out, dst); err != nil {
+		return nil, 0, 0, err
+	}
+	return out.Bytes(), cols, rows, nil
 }
 
 // centerSquare returns the largest centered square inside r.
