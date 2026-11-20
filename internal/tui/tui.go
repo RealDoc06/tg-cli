@@ -244,8 +244,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.X >= lw {
 			return m, m.setFocus(focusInput)
 		}
-		if i := m.top + (msg.Y-1)/chatStride; (msg.Y-1)%chatStride < 2 && i < len(m.visible()) {
-			m.sel = i
+		if k := (msg.Y - 1) / chatStride; (msg.Y-1)%chatStride < 2 && k < m.listRows() && m.top+k < len(m.visible()) {
+			m.sel = m.top + k
 			return m, m.openSelected()
 		}
 		return m, nil
@@ -595,8 +595,8 @@ func (m *model) unstash() {
 // message drops the reply.
 func (m *model) pickReply(delta int) tea.Cmd {
 	h := m.histories[m.openID]
-	if h == nil {
-		return nil
+	if h == nil || m.editing != 0 {
+		return nil // an edit is cancelled with esc, not by picking a reply
 	}
 	msgs := slices.DeleteFunc(slices.Clone(h.msgs), func(msg core.Message) bool { return msg.Service })
 	i := slices.IndexFunc(msgs, func(msg core.Message) bool { return msg.ID == m.replyTo })

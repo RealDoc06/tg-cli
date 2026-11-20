@@ -115,8 +115,8 @@ func TestOpenChatDedupesAndStaysRead(t *testing.T) {
 	// An edit of a message older than the loaded page stays out of it.
 	old := core.Message{ID: 1, ChatID: chat.ID, From: "Someone", Date: time.Now(), Text: "old, edited", Edited: true}
 	m.Update(eventMsg(core.Event{Kind: core.EventEdit, Chat: chat, Message: old}))
-	if last := m.histories[chat.ID].msgs; last[len(last)-1].ID != msg.ID {
-		t.Error("an edit of an unloaded older message was shown as the newest")
+	if slices.ContainsFunc(m.histories[chat.ID].msgs, func(o core.Message) bool { return o.ID == old.ID }) {
+		t.Error("an edit of an unloaded older message was added to the history")
 	}
 	// A new message arriving out of order is still shown.
 	late := core.Message{ID: 9000, ChatID: chat.ID, From: "Someone", Date: time.Now(), Text: "late"}
@@ -222,6 +222,15 @@ func TestCtrlArrowsPickTheReply(t *testing.T) {
 	if m.replyTo != 0 {
 		t.Fatalf("going past the newest message kept the reply to %d", m.replyTo)
 	}
+
+	// While editing, picking a reply would throw the changes away.
+	own, _ := m.lastOwn()
+	m.edit(own)
+	m.Update(up)
+	if m.editing != own.ID || m.replyTo != 0 {
+		t.Fatalf("ctrl+up during an edit: editing %d, reply to %d", m.editing, m.replyTo)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	m.Update(up)
 	for _, r := range "on it" {
@@ -365,6 +374,15 @@ func TestClickOpensTheChatUnderIt(t *testing.T) {
 	m.Update(tea.MouseClickMsg{X: 10, Y: y + 2, Button: tea.MouseLeft}) // the gap below it
 	if m.openID != 0 {
 		t.Fatalf("a click on the gap opened chat %d", m.openID)
+	}
+	// Below the last chat drawn, where the next one would go if it fit.
+	if rows := m.listRows(); len(m.visible()) > rows {
+		m.Update(tea.MouseClickMsg{X: 10, Y: 1 + chatStride*rows, Button: tea.MouseLeft})
+		if m.openID != 0 {
+			t.Fatalf("a click below the list opened chat %d, which is not drawn", m.openID)
+		}
+	} else {
+		t.Fatal("the demo chats are expected to overflow the list")
 	}
 	m.Update(tea.MouseClickMsg{X: 10, Y: y + 1, Button: tea.MouseLeft})
 	if m.openID != second.ID {
