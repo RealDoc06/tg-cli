@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -117,6 +118,8 @@ type model struct {
 	free    []int
 	freedAt map[int]time.Time
 	loadSeq int
+	// uploading holds the IDs of pictures on their way to the terminal.
+	uploading map[int]bool
 	// view is cancelled when another chat opens, which stops loading the
 	// pictures of the one left. jobs bounds how many load at once.
 	view  context.Context
@@ -269,7 +272,7 @@ func newModel(ctx context.Context, be core.Backend, theme string) *model {
 	t, ok := FindTheme(theme)
 	m := &model{
 		ctx: ctx, be: be, histories: map[int64]*history{}, images: map[imageKey]shown{}, saving: map[int64]int{},
-		jobs: make(chan struct{}, 3), freedAt: map[int]time.Time{},
+		jobs: make(chan struct{}, 3), freedAt: map[int]time.Time{}, uploading: map[int]bool{},
 	}
 	m.view, m.leave = context.WithCancel(ctx)
 	if !ok {
@@ -307,7 +310,9 @@ func (m *model) Init() tea.Cmd {
 // Update handles a message, then fetches the pictures that came into view,
 // whatever moved them there.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	cmds := []tea.Cmd{m.update(msg), m.loadPictures()}
+	// Avatars too: on a narrow terminal the list shows again by a focus
+	// change alone.
+	cmds := []tea.Cmd{m.update(msg), m.loadPictures(), m.loadAvatars()}
 	if m.imageBytes > imageBudget {
 		m.evict() // pictures that left the view can go now
 	}
@@ -506,12 +511,14 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		// cells drawn before their image may stay blank. An animation plays
 		// in the terminal from then on, without redraws.
 		img := shown{m.nextImage(), msg.cols, msg.rows, termimg.Footprint(msg.frames), msg.seq}
+		m.uploading[img.id] = true
 		return tea.Sequence(
 			tea.Raw(termimg.Transmit(img.id, img.cols, img.rows, msg.frames[0])+termimg.Play(img.id, msg.gap, msg.frames[1:])),
 			func() tea.Msg { return uploadedMsg{msg.key, img} },
 		)
 
 	case uploadedMsg:
+		delete(m.uploading, msg.img.id)
 		if cur, ok := m.images[msg.key]; !ok || cur.seq != msg.img.seq || cur.id != 0 {
 			m.free = append(m.free, msg.img.id) // replaced or dropped while it uploaded
 			return nil
@@ -974,7 +981,7 @@ func (m *model) pasteImage() tea.Cmd {
 // unless the scroll offset grows with them.
 func (m *model) keepView(msgID int, change func()) {
 	h := m.histories[m.openID]
-	_, rw := m.layout()
+	rw := m.conversationWidth()
 	if m.scroll == 0 || h == nil || rw == 0 {
 		change()
 		return
@@ -1065,11 +1072,18 @@ func (m *model) afterMove() tea.Cmd {
 	if m.sel >= m.top+rows {
 		m.top = m.sel - rows + 1
 	}
-	if !m.graphics {
+	return m.loadAvatars()
+}
+
+// loadAvatars requests the avatars of the chats in view, while the chat list
+// shows.
+func (m *model) loadAvatars() tea.Cmd {
+	if lw, _ := m.layout(); !m.graphics || lw == 0 {
 		return nil
 	}
+	chats := m.visible()
 	var cmds []tea.Cmd
-	for _, c := range chats[m.top:min(len(chats), m.top+rows)] {
+	for _, c := range chats[min(m.top, len(chats)):min(len(chats), m.top+m.listRows())] {
 		key := imageKey{chat: c.ID}
 		if _, seen := m.images[key]; seen {
 			continue
@@ -1188,7 +1202,7 @@ func (m *model) loading(key imageKey) int {
 // still be on its way. With none left, the oldest picture off screen gives
 // its ID up: the upload replaces it, no delete needed.
 func (m *model) nextImage() int {
-	held := map[int]bool{}
+	held := maps.Clone(m.uploading)
 	for _, img := range m.images {
 		held[img.id] = true
 	}

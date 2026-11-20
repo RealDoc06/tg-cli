@@ -60,7 +60,8 @@ func (r *renderer) release(buf *image.RGBA) {
 // layers draws a composition's layers onto dst, bottom one first. frame is
 // in the composition's time, base maps it to pixels.
 func (r *renderer) layers(dst *image.RGBA, ls []layer, frame float64, base affine, depth int) {
-	if depth > maxDepth {
+	// Even layers that draw nothing are looked through, once per use.
+	if r.raster.work += len(ls); depth > maxDepth || r.raster.work > workBudget {
 		return
 	}
 	byIndex := map[int]*layer{}
@@ -390,7 +391,14 @@ func (b *builder) geometry(it *shape) bezier {
 // draw trims the outlines, nearest trim first, then paints every style.
 func (b *builder) draw(r *raster, dst *image.RGBA) {
 	for _, t := range slices.Backward(b.trims) {
-		if !b.spend(len(t.targets)) {
+		// A trim walks every point of what it cuts.
+		n := len(t.targets)
+		for _, e := range t.targets {
+			for _, p := range e.paths {
+				n += len(p.pts)
+			}
+		}
+		if !b.spend(n) {
 			return
 		}
 		slices.Reverse(t.targets)

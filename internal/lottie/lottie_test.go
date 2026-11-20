@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The fixtures draw on a 100 x 100 canvas, rendered at its own size.
@@ -174,6 +175,23 @@ func TestHostileFilesAreBounded(t *testing.T) {
 	fanOut := parse(`{"fr":60,"ip":0,"op":60,"w":100,"h":100,"layers":[` + precomp("a0") + `],"assets":[` + strings.Join(assets, ",") + `]}`)
 	if _, err := fanOut.Render(0, 100, 100); err != ErrTooComplex {
 		t.Errorf("fan out: %v", err)
+	}
+
+	// Hundreds of trims over one long curve, each walking all its points.
+	var v, tangents []string
+	for i := range 1000 {
+		v = append(v, fmt.Sprintf("[%d,%d]", i%100, i%37))
+		tangents = append(tangents, "[30,-30]")
+	}
+	curve := `{"ty":"sh","ks":{"k":{"c":true,"v":[` + strings.Join(v, ",") + `],"i":[` + strings.Join(tangents, ",") + `],"o":[` + strings.Join(tangents, ",") + `]}}}`
+	items := []string{curve}
+	for range 900 {
+		items = append(items, `{"ty":"tm","s":{"k":0.1},"e":{"k":100},"o":{"k":0},"m":1}`)
+	}
+	trims := parse(`{"fr":60,"ip":0,"op":60,"w":100,"h":100,"layers":[` + shapes("", append(items, blue)...) + `]}`)
+	start := time.Now()
+	if _, err := trims.Render(0, 256, 256); err != ErrTooComplex || time.Since(start) > 2*time.Second {
+		t.Errorf("trims: %v after %v", err, time.Since(start))
 	}
 
 	cases := map[string]string{
