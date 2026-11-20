@@ -117,6 +117,12 @@ func TestOpenChatDedupesAndStaysRead(t *testing.T) {
 	if last := m.histories[chat.ID].msgs; last[len(last)-1].ID != msg.ID {
 		t.Error("an edit of an unloaded older message was shown as the newest")
 	}
+	// A new message arriving out of order is still shown.
+	late := core.Message{ID: 9000, ChatID: chat.ID, From: "Someone", Date: time.Now(), Text: "late"}
+	m.Update(eventMsg(core.Event{Kind: core.EventMessage, Chat: chat, Message: late}))
+	if !slices.ContainsFunc(m.histories[chat.ID].msgs, func(o core.Message) bool { return o.ID == late.ID }) {
+		t.Error("a new message that arrived out of order was dropped")
+	}
 	if unread := m.chat(chat.ID).Unread; unread != 0 {
 		t.Errorf("open chat has %d unread", unread)
 	}

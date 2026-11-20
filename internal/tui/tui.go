@@ -289,7 +289,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "send failed: " + msg.err.Error()
 			return m, nil
 		}
-		m.addMessage(msg.msg, nil)
+		m.addMessage(msg.msg, nil, false)
 		m.scroll = 0
 		return m, nil
 
@@ -334,8 +334,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if ev.Kind == core.EventReady {
 			return m, nil
 		}
-		m.addMessage(ev.Message, &ev.Chat)
-		cmds := []tea.Cmd{m.afterMove()}
+		m.addMessage(ev.Message, &ev.Chat, ev.Kind == core.EventEdit)
+		// An edit can change how many lines a message takes.
+		cmds := []tea.Cmd{m.afterMove(), m.afterScroll()}
 		if ev.Message.ChatID == m.openID && !ev.Message.Out {
 			cmds = append(cmds, m.markRead(m.openID))
 		}
@@ -816,14 +817,14 @@ func (m *model) markRead(chatID int64) tea.Cmd {
 }
 
 // addMessage records a new or edited message in the history and in the chat
-// list. chat describes the conversation for chats not listed yet.
-func (m *model) addMessage(msg core.Message, chat *core.Chat) {
+// list. chat describes the conversation for chats not listed yet. An edit of
+// a message that is not loaded stays out of the history: it is older than
+// the loaded page and must not show up as the newest.
+func (m *model) addMessage(msg core.Message, chat *core.Chat, edit bool) {
 	if h := m.histories[msg.ChatID]; h != nil && h.loaded {
 		if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.ID }); i >= 0 {
 			h.msgs[i] = msg
-		} else if len(h.msgs) == 0 || msg.ID > h.msgs[len(h.msgs)-1].ID {
-			// Only newer messages join: an edit of one older than what is
-			// loaded must not show up as the newest.
+		} else if !edit {
 			h.msgs = append(h.msgs, msg)
 			if msg.ChatID == m.openID && m.scroll > 0 {
 				m.scroll = 0
