@@ -318,26 +318,20 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		)
 
 	case uploadedMsg:
-		m.images[msg.key] = msg.img
-		// When reading older messages, the photo grows downwards instead of
-		// pushing what is above it out of view.
-		if msg.key.msg != 0 && msg.key.chat == m.openID && m.scroll > 0 {
-			m.scroll += msg.img.rows
-		}
+		m.keepView(msg.key.msg, func() { m.images[msg.key] = msg.img })
 		return nil
 
 	case clipboardMsg:
 		switch {
 		case msg.chatID != m.openID:
 			return nil // the image was meant for another chat
-		case errors.Is(msg.err, clipboard.ErrNoImage):
-			return textinput.Paste // no image, ctrl+v pastes text as before
-		case msg.err != nil:
-			m.status = msg.err.Error()
+		case msg.err == nil:
+			m.attach = core.SendRequest{Photo: msg.png}
 			return nil
+		case !errors.Is(msg.err, clipboard.ErrNoImage):
+			m.status = msg.err.Error()
 		}
-		m.attach = core.SendRequest{Photo: msg.png}
-		return nil
+		return textinput.Paste // no image, ctrl+v pastes text as before
 
 	case tea.PasteMsg:
 		if m.focus == focusInput {
@@ -438,7 +432,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 			m.scroll -= m.messageRows() / 2
 			return m.afterScroll()
 		case "ctrl+v":
-			return m.pasteImage
+			return m.pasteImage(m.openID)
 		case "backspace":
 			if m.input.Value() == "" && m.attached() {
 				m.attach = core.SendRequest{}
@@ -471,7 +465,7 @@ func (m *model) attached() bool { return m.attach.File != "" || m.attach.Photo !
 // is what some terminals send when the clipboard holds only an image.
 func (m *model) paste(text string) tea.Cmd {
 	if strings.TrimSpace(text) == "" {
-		return m.pasteImage
+		return m.pasteImage(m.openID)
 	}
 	if path, ok := imagePath(text); ok {
 		m.attach = core.SendRequest{File: path}
@@ -482,12 +476,38 @@ func (m *model) paste(text string) tea.Cmd {
 	return cmd
 }
 
-// pasteImage reads an image from the system clipboard, for terminals that
-// only paste text.
-func (m *model) pasteImage() tea.Msg {
-	chatID := m.openID
-	data, err := clipboard.Image(m.ctx)
-	return clipboardMsg{chatID, data, err}
+// pasteImage reads an image from the system clipboard into the composer of
+// chatID, for terminals that only paste text.
+func (m *model) pasteImage(chatID int64) tea.Cmd {
+	return func() tea.Msg {
+		data, err := clipboard.Image(m.ctx)
+		return clipboardMsg{chatID, data, err}
+	}
+}
+
+// keepView applies change, which redraws message msgID of the open chat, so
+// that what the user reads does not move. The conversation is anchored at
+// its bottom, so lines that grow inside or below the view would push it up
+// unless the scroll offset grows with them.
+func (m *model) keepView(msgID int, change func()) {
+	h := m.histories[m.openID]
+	_, rw := m.layout()
+	if m.scroll == 0 || h == nil || rw == 0 {
+		change()
+		return
+	}
+	before := m.messageLines(h, rw)
+	top := len(before) - m.scroll - m.messageRows()
+	end := -1 // the line after the message, where lines are added
+	for i, l := range before {
+		if l.msg >= 0 && h.msgs[l.msg].ID == msgID {
+			end = i + 1
+		}
+	}
+	change()
+	if end > top {
+		m.scroll += len(m.messageLines(h, rw)) - len(before)
+	}
 }
 
 // imagePath reports whether pasted text is the absolute path of one image
@@ -590,6 +610,9 @@ func (m *model) loadPhotos() tea.Cmd {
 	lines := m.messageLines(h, rw)
 	end := max(0, len(lines)-m.scroll)
 	maxCols := min(photoCols, rw-photoIndent-1)
+	if maxCols < 1 {
+		return nil // no room for a photo, its label is shown
+	}
 	var cmds []tea.Cmd
 	for _, l := range lines[max(0, end-m.messageRows()):end] {
 		if l.msg < 0 || h.msgs[l.msg].Media != core.MediaPhoto {

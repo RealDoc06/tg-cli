@@ -211,7 +211,11 @@ func TestPastedImagePathIsSentAsPhoto(t *testing.T) {
 
 	m := loaded(t, 120, 30)
 	open(t, m, 1)
-	m.Update(tea.PasteMsg{Content: strings.ReplaceAll(path, " ", `\ `)})
+	pasted := path
+	if filepath.Separator == '/' {
+		pasted = strings.ReplaceAll(path, " ", `\ `) // how POSIX shells escape it
+	}
+	m.Update(tea.PasteMsg{Content: pasted})
 	if m.attach.File != path || m.input.Value() != "" {
 		t.Fatalf("attached %q, input %q", m.attach.File, m.input.Value())
 	}
@@ -248,7 +252,11 @@ func TestClipboardImageStaysWithItsChat(t *testing.T) {
 	m := loaded(t, 120, 30)
 	open(t, m, 1)
 	first := m.openID
+	read := m.key(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
 	open(t, m, 2)
+	if got := read().(clipboardMsg).chatID; got != first {
+		t.Fatalf("the read is for chat %d, ctrl+v was pressed in %d", got, first)
+	}
 	m.Update(clipboardMsg{chatID: first, png: []byte("png")})
 	if m.attached() {
 		t.Error("an image read for another chat was attached")
@@ -256,5 +264,26 @@ func TestClipboardImageStaysWithItsChat(t *testing.T) {
 	m.Update(clipboardMsg{chatID: m.openID, png: []byte("png")})
 	if !m.attached() {
 		t.Error("the image was not attached")
+	}
+}
+
+// Reading older messages, a photo that loads must not move the text in view.
+func TestPhotoLoadKeepsTheView(t *testing.T) {
+	m := loaded(t, 120, 16)
+	m.graphics = true
+	open(t, m, 1)
+	m.images = map[imageKey]shown{}
+	m.scroll = 4 // the photo and the lines around it are in view
+	top := func() string {
+		rows := strings.Split(ansi.Strip(m.View().Content), "\n")
+		return rows[1] // below the chat title
+	}
+	before := top()
+	upload(m, m.loadPhotos())
+	if len(m.images) == 0 {
+		t.Fatal("no photo was loaded")
+	}
+	if after := top(); after != before {
+		t.Errorf("top line went from %q to %q", before, after)
 	}
 }
