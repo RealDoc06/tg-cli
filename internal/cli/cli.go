@@ -201,7 +201,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 				label = name
 			}
 			look := func(f *config.File) tui.Look {
-				return tui.Look{Theme: f.Theme, Spaced: f.SpacedMessages, Keys: f.Keys}
+				return tui.Look{Theme: f.Theme, Spaced: f.SpacedMessages, Keys: f.Keys, PackedChats: f.PackedChats}
 			}
 			// The settings menu saves one change at a time, over config.json
 			// as it is then.
@@ -209,7 +209,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 				return config.Update(func(f *config.File) error {
 					l := look(f)
 					change(&l)
-					f.Theme, f.SpacedMessages, f.Keys = l.Theme, l.Spaced, l.Keys
+					f.Theme, f.SpacedMessages, f.Keys, f.PackedChats = l.Theme, l.Spaced, l.Keys, l.PackedChats
 					return nil
 				})
 			}

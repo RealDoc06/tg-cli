@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // The settings menu opens with esc from the chat list, as in btop. A change
@@ -31,15 +32,21 @@ var settingsItems = []setting{
 		name := Themes[(i+delta+len(Themes))%len(Themes)].Name
 		return func(l *Look) { l.Theme = name }
 	}},
-	{"Spacing", func(l Look) string { return map[bool]string{true: "on", false: "off"}[l.Spaced] }, func(l Look, _ int) func(*Look) {
+	{"Message spacing", func(l Look) string { return onOff[l.Spaced] }, func(l Look, _ int) func(*Look) {
 		on := !l.Spaced
 		return func(l *Look) { l.Spaced = on }
+	}},
+	{"Chat spacing", func(l Look) string { return onOff[!l.PackedChats] }, func(l Look, _ int) func(*Look) {
+		packed := !l.PackedChats
+		return func(l *Look) { l.PackedChats = packed }
 	}},
 	{"Shortcuts", func(l Look) string { return map[bool]string{true: "macOS", false: "PC"}[l.mac()] }, func(l Look, _ int) func(*Look) {
 		keys := map[bool]string{true: "pc", false: "mac"}[l.mac()]
 		return func(l *Look) { l.Keys = keys }
 	}},
 }
+
+var onOff = map[bool]string{true: "on", false: "off"}
 
 // mac reports whether shortcuts are written the way Mac keyboards label them.
 // Over SSH tg runs on another system than the keyboard, so it can be set.
@@ -66,31 +73,46 @@ func (m *model) changeSetting(delta int) tea.Cmd {
 			m.status = "the setting is not saved: " + err.Error()
 		}
 	}
-	return m.afterScroll() // spacing changes how many lines there are
+	// Spacing changes how many lines there are, and how many chats fit.
+	return tea.Batch(m.afterMove(), m.afterScroll())
 }
 
-// settingsWidth is the width of the settings menu.
-const settingsWidth = 30
+// settingsWidth is the width of the settings box, borders included.
+const settingsWidth = 38
 
-// settingsBox is where the settings menu is drawn: centered, a title line
-// above one line per setting.
+// The settings box is a rounded border with the title in its top edge and a
+// blank row above and below the settings: setting i is on row settingsTop+i.
+const settingsTop = 2
+
+// settingsBox is where the settings box is drawn, centered over the panes.
 func (m *model) settingsBox() (x, y, w int) {
 	w = min(settingsWidth, m.width)
-	return max(0, (m.width-w)/2), max(0, (m.bodyRows()-1-len(settingsItems))/2), w
+	h := len(settingsItems) + 2*settingsTop
+	return max(0, (m.width-w)/2), max(0, (m.bodyRows()-h)/2), w
 }
 
-// settingsLines renders the settings menu, w cells wide. The highlighted
-// setting shows arrows around its value, which change it.
+// settingsLines renders the settings box, w cells wide. The highlighted
+// setting is marked with a bar, as the selected chat is, and shows arrows
+// around its value, which change it.
 func (m *model) settingsLines(w int) []string {
-	lines := []string{m.st.menu.Bold(true).Render(fit(" Settings", w))}
+	inner := max(0, w-2)
+	side := m.st.border.Render("│")
+	title := " Settings "
+	top := m.st.border.Render("╭─") + m.st.accent.Bold(true).Render(title) +
+		m.st.border.Render(strings.Repeat("─", max(0, inner-1-len(title)))+"╮")
+	blank := side + strings.Repeat(" ", inner) + side
+
+	lines := []string{ansi.Truncate(top, w, ""), blank}
 	for i, s := range settingsItems {
-		style, value := m.st.menu, "  "+s.value(m.look)+"  "
+		bar, name, value := " ", m.st.text.Render(s.name), m.st.muted.Render(s.value(m.look))+"    "
 		if i == m.settings.sel {
-			style, value = m.st.menuSel, "‹ "+s.value(m.look)+" ›"
+			bar = m.st.accent.Render("▌")
+			name = m.st.accent.Bold(true).Render(s.name)
+			value = m.st.text.Render("‹ "+s.value(m.look)+" ›") + "  "
 		}
-		lines = append(lines, style.Render(spread(" "+s.name, value+" ", w)))
+		lines = append(lines, side+bar+spread(" "+name, value, max(0, inner-1))+side)
 	}
-	return lines
+	return append(lines, blank, m.st.border.Render("╰"+strings.Repeat("─", inner)+"╯"))
 }
 
 // keyName writes a key the way the keyboard labels it. On a Mac option and
