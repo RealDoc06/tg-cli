@@ -388,4 +388,11 @@ func TestClickOpensTheChatUnderIt(t *testing.T) {
 	if m.openID != second.ID {
 		t.Errorf("opened chat %d, want %q", m.openID, second.Title)
 	}
+
+	// Too short to draw any chat: nothing is there to click.
+	tiny := loaded(t, 120, 3)
+	tiny.Update(tea.MouseClickMsg{X: 10, Y: 1, Button: tea.MouseLeft})
+	if tiny.openID != 0 {
+		t.Errorf("a click in a list too short for any chat opened chat %d", tiny.openID)
+	}
 }

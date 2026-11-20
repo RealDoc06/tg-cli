@@ -32,8 +32,10 @@ func (m *model) layout() (left, right int) {
 // next: chat k starts on row 1+chatStride*k, below the list's title.
 const chatStride = 3
 
-// listRows is how many chats fit in the list.
-func (m *model) listRows() int { return max(1, (m.height-1)/chatStride) }
+// chatsDrawn is how many chats fit in the list, possibly none. listRows is
+// the same at least one, for paging and keeping the selection in view.
+func (m *model) chatsDrawn() int { return max(0, (m.height-1)/chatStride) }
+func (m *model) listRows() int   { return max(1, m.chatsDrawn()) }
 
 // The conversation pane is, top to bottom: the title and a gap, the messages,
 // a gap, the reply or edit being written when there is one, and the composer.
