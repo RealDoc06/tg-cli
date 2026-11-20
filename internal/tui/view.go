@@ -315,7 +315,8 @@ func (m *model) draftLine(w int) string {
 
 // messageLines lays the history out for a pane of width w: a date line per
 // day, then "HH:MM Name: text" wrapped with a hanging indent, with a gap
-// where the sender changes. ids holds the message ID of each line, 0 for
+// between messages. Agents sharing an account all send as "You", so the gap
+// cannot follow the sender. ids holds the message ID of each line, 0 for
 // dates and gaps. The message being replied to or edited is marked.
 func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 	const indent = 7 // " HH:MM "
@@ -324,7 +325,6 @@ func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 	}
 	byID := make(map[int]*core.Message, len(h.msgs))
 	var day string
-	var prev *core.Message
 	for i := range h.msgs {
 		msg := &h.msgs[i]
 		byID[msg.ID] = msg
@@ -335,10 +335,9 @@ func (m *model) messageLines(h *history, w int) (lines []string, ids []int) {
 			}
 			day = d
 			add(0, center(m.st.muted.Render(d), w))
-		} else if prev != nil && (prev.Out != msg.Out || prev.FromID != msg.FromID || prev.Service != msg.Service) {
+		} else {
 			add(0, "")
 		}
-		prev = msg
 
 		mark := " "
 		if msg.ID == m.replyTo || msg.ID == m.editing {
