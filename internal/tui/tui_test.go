@@ -252,18 +252,29 @@ func TestLongAttachmentNameFits(t *testing.T) {
 func TestStaleClipboardReadIsDropped(t *testing.T) {
 	m := loaded(t, 120, 30)
 	open(t, m, 1)
-	read := m.key(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
+	seq := m.attachSeq // ctrl+v pressed, then the user moves on
 	open(t, m, 2)
-	m.Update(read())
+	m.Update(clipboardMsg{seq: seq, png: []byte("old")})
+	m.Update(clipboardMsg{seq: seq, text: "old"})
 	if m.attached() || m.input.Value() != "" {
 		t.Errorf("a read from another chat landed: %+v, %q", m.attach, m.input.Value())
 	}
 
-	seq := m.attachSeq // ctrl+v pressed, then a file dropped before the read returns
+	seq = m.attachSeq
 	m.setAttach(core.SendRequest{File: "/dropped.png"})
 	m.Update(clipboardMsg{seq: seq, png: []byte("old")})
 	if m.attach.File != "/dropped.png" {
 		t.Error("an older clipboard read replaced the dropped file")
+	}
+}
+
+// Clipboard text that is only blank must be pasted, not taken for the empty
+// paste of an image-only clipboard, which read the clipboard again forever.
+func TestBlankClipboardTextDoesNotReadAgain(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	if cmd := m.update(clipboardMsg{seq: m.attachSeq, text: "\n"}); cmd != nil {
+		t.Error("blank clipboard text started another command")
 	}
 }
 

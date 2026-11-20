@@ -284,8 +284,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			// else was written since.
 			if msg.chatID == m.openID && m.input.Value() == "" && !m.attached() {
 				m.input.SetValue(msg.req.Text)
-				msg.req.Text = ""
-				m.setAttach(msg.req)
+				if msg.req.File != "" || msg.req.Photo != nil {
+					msg.req.Text = ""
+					m.setAttach(msg.req)
+				}
 			}
 			return nil
 		}
@@ -334,15 +336,20 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		case msg.png != nil:
 			m.setAttach(core.SendRequest{Photo: msg.png})
 		case msg.text != "":
-			return m.paste(msg.text) // no image, ctrl+v pastes text as before
+			return m.pasteText(msg.text) // no image, ctrl+v pastes text as before
 		case !errors.Is(msg.err, clipboard.ErrNoImage):
 			m.status = msg.err.Error()
 		}
 		return nil
 
 	case tea.PasteMsg:
+		// An empty paste is what some terminals send when the clipboard
+		// holds only an image.
+		if m.focus == focusInput && strings.TrimSpace(msg.Content) == "" {
+			return m.pasteImage()
+		}
 		if m.focus == focusInput {
-			return m.paste(msg.Content)
+			return m.pasteText(msg.Content)
 		}
 
 	case errMsg:
@@ -467,13 +474,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 
 func (m *model) attached() bool { return m.attach.File != "" || m.attach.Photo != nil }
 
-// paste handles text pasted into the composer. The path of an image, which
-// is what dropping a file on the terminal pastes, attaches it. An empty paste
-// is what some terminals send when the clipboard holds only an image.
-func (m *model) paste(text string) tea.Cmd {
-	if strings.TrimSpace(text) == "" {
-		return m.pasteImage()
-	}
+// pasteText handles text pasted into the composer, by the terminal or read
+// from the clipboard. The path of an image, which is what dropping a file on
+// the terminal pastes, attaches it. It never reads the clipboard itself.
+func (m *model) pasteText(text string) tea.Cmd {
 	if path, ok := imagePath(text); ok {
 		m.setAttach(core.SendRequest{File: path})
 		return nil

@@ -5,6 +5,7 @@
 package clipboard
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -49,7 +50,9 @@ func Image(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(data) == 0 {
+	// Some clipboard owners, xclip among them, hand out text for any type
+	// asked for, so the data has to prove it is a PNG.
+	if !bytes.HasPrefix(data, []byte("\x89PNG\r\n\x1a\n")) {
 		return nil, ErrNoImage
 	}
 	return data, nil
