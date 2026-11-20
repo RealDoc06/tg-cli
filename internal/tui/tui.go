@@ -110,11 +110,13 @@ type (
 		older  bool
 		err    error
 	}
+	// sentMsg reports a send. seq is attachSeq once the composer was
+	// cleared for it.
 	sentMsg struct {
-		chatID int64
-		req    core.SendRequest
-		msg    core.Message
-		err    error
+		seq int
+		req core.SendRequest
+		msg core.Message
+		err error
 	}
 	// imageMsg carries a picture ready to upload, png is nil when it could
 	// not be loaded.
@@ -280,9 +282,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case sentMsg:
 		if msg.err != nil {
 			m.status = "send failed: " + msg.err.Error()
-			// Give the message back, so it is not lost, unless something
-			// else was written since.
-			if msg.chatID == m.openID && m.input.Value() == "" && !m.attached() {
+			// Give the message back, so it is not lost, unless the chat
+			// changed or something else was written or pasted since.
+			if msg.seq == m.attachSeq && m.input.Value() == "" {
 				m.input.SetValue(msg.req.Text)
 				if msg.req.File != "" || msg.req.Photo != nil {
 					msg.req.Text = ""
@@ -345,7 +347,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case tea.PasteMsg:
 		// An empty paste is what some terminals send when the clipboard
 		// holds only an image.
-		if m.focus == focusInput && strings.TrimSpace(msg.Content) == "" {
+		if m.focus == focusInput && msg.Content == "" {
 			return m.pasteImage()
 		}
 		if m.focus == focusInput {
@@ -460,10 +462,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			m.input.Reset()
 			m.setAttach(core.SendRequest{})
-			chatID := m.openID
+			chatID, seq := m.openID, m.attachSeq
 			return func() tea.Msg {
 				sent, err := m.be.Send(m.ctx, chatID, req)
-				return sentMsg{chatID, req, sent, err}
+				return sentMsg{seq, req, sent, err}
 			}
 		}
 		var cmd tea.Cmd
@@ -495,6 +497,7 @@ func (m *model) setAttach(req core.SendRequest) {
 // pasteImage reads the system clipboard for terminals that only paste text:
 // its image, or else its text.
 func (m *model) pasteImage() tea.Cmd {
+	m.attachSeq++ // only the latest read may land
 	seq := m.attachSeq
 	return func() tea.Msg {
 		data, err := clipboard.Image(m.ctx)

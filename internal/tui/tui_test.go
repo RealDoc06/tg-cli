@@ -260,11 +260,32 @@ func TestStaleClipboardReadIsDropped(t *testing.T) {
 		t.Errorf("a read from another chat landed: %+v, %q", m.attach, m.input.Value())
 	}
 
+	m.pasteImage()
 	seq = m.attachSeq
 	m.setAttach(core.SendRequest{File: "/dropped.png"})
 	m.Update(clipboardMsg{seq: seq, png: []byte("old")})
 	if m.attach.File != "/dropped.png" {
 		t.Error("an older clipboard read replaced the dropped file")
+	}
+
+	m.pasteImage()
+	seq = m.attachSeq
+	m.pasteImage() // ctrl+v pressed again before the first read returned
+	m.Update(clipboardMsg{seq: seq, png: []byte("old")})
+	if m.attach.File != "/dropped.png" {
+		t.Error("the first of two clipboard reads was attached")
+	}
+}
+
+// Only an empty terminal paste stands for an image-only clipboard. Pasted
+// blank text must not attach whatever image the system clipboard holds.
+func TestBlankPasteDoesNotReadTheClipboard(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	seq := m.attachSeq
+	m.Update(tea.PasteMsg{Content: " \n"})
+	if m.attachSeq != seq {
+		t.Error("a blank paste read the clipboard")
 	}
 }
 
