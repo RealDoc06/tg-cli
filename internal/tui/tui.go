@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -79,6 +80,9 @@ type model struct {
 	// attachSeq counts changes to attach. A clipboard read started before
 	// the latest one is stale: the user moved on.
 	attachSeq int
+	// pasting is the attachSeq of the clipboard read in progress. While it
+	// is current, enter waits: it would send what the read is replacing.
+	pasting int
 
 	// images holds the pictures uploaded to the terminal. An entry with ID
 	// 0 is loading, or failed and shows as text.
@@ -332,9 +336,11 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return nil
 
 	case clipboardMsg:
-		switch {
-		case msg.seq != m.attachSeq:
+		if msg.seq != m.attachSeq {
 			return nil // the chat or the attachment changed since
+		}
+		m.pasting = 0
+		switch {
 		case msg.png != nil:
 			m.setAttach(core.SendRequest{Photo: msg.png})
 		case msg.text != "":
@@ -440,6 +446,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	default: // focusInput
 		switch key {
 		case "esc", "tab":
+			if m.readingClipboard() {
+				m.attachSeq++ // cancels the read, the clipboard helper may hang
+				return nil
+			}
 			return m.setFocus(focusChats)
 		case "pgup":
 			m.scroll += m.messageRows() / 2
@@ -455,6 +465,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 		case "enter":
+			if m.readingClipboard() {
+				m.status = "reading the clipboard, esc cancels"
+				return nil
+			}
 			req := m.attach
 			req.Text = strings.TrimSpace(m.input.Value())
 			if req.Text == "" && !m.attached() {
@@ -489,6 +503,8 @@ func (m *model) pasteText(text string) tea.Cmd {
 	return cmd
 }
 
+func (m *model) readingClipboard() bool { return m.pasting != 0 && m.pasting == m.attachSeq }
+
 func (m *model) setAttach(req core.SendRequest) {
 	m.attach = req
 	m.attachSeq++
@@ -499,6 +515,7 @@ func (m *model) setAttach(req core.SendRequest) {
 func (m *model) pasteImage() tea.Cmd {
 	m.attachSeq++ // only the latest read may land
 	seq := m.attachSeq
+	m.pasting = seq
 	return func() tea.Msg {
 		data, err := clipboard.Image(m.ctx)
 		if err != nil {
@@ -542,7 +559,11 @@ func imagePath(text string) (string, bool) {
 	text = strings.TrimSpace(text)
 	candidates := []string{text, strings.Trim(text, `'"`), strings.ReplaceAll(text, `\`, "")}
 	if u, err := url.Parse(text); err == nil && u.Scheme == "file" && (u.Host == "" || u.Host == "localhost") {
-		candidates = append(candidates, u.Path)
+		path := u.Path
+		if runtime.GOOS == "windows" && len(path) > 2 && path[0] == '/' && path[2] == ':' {
+			path = filepath.FromSlash(path[1:]) // file:///C:/x.png
+		}
+		candidates = append(candidates, path)
 	}
 	for _, path := range candidates {
 		if !filepath.IsAbs(path) || !core.IsPhotoFile(path) {

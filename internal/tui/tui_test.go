@@ -361,3 +361,29 @@ func TestFailedSendRestoresTheDraft(t *testing.T) {
 		t.Error("the draft was restored into another chat")
 	}
 }
+
+// Enter during a clipboard read would send what the read is about to
+// replace. It waits instead, and esc cancels a read that never returns.
+func TestEnterWaitsForTheClipboard(t *testing.T) {
+	m := loaded(t, 120, 30)
+	open(t, m, 1)
+	m.setAttach(core.SendRequest{File: "/a.png"})
+	m.pasteImage() // ctrl+v with screenshot B in the clipboard
+	if cmd := m.key(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil || m.attach.File != "/a.png" {
+		t.Fatal("enter sent while the clipboard was being read")
+	}
+
+	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.focus != focusInput || m.readingClipboard() {
+		t.Fatal("esc did not cancel the read")
+	}
+	if m.key(tea.KeyPressMsg{Code: tea.KeyEnter}) == nil {
+		t.Error("enter does not send once the read is cancelled")
+	}
+
+	seq := func() int { m.pasteImage(); return m.attachSeq }()
+	m.Update(clipboardMsg{seq: seq, png: []byte("b")})
+	if m.readingClipboard() || string(m.attach.Photo) != "b" {
+		t.Error("the read did not finish")
+	}
+}
