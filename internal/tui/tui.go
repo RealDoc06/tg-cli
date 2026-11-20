@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -549,7 +550,7 @@ func (m *model) reply(msg core.Message) tea.Cmd {
 func (m *model) edit(msg core.Message) tea.Cmd {
 	switch {
 	case !fitsComposer(msg.Text):
-		m.status = "the composer would change this message (it holds one line of plain text), edit it in another Telegram app"
+		m.status = "the composer cannot hold this message as it is (line breaks, special characters), edit it in another Telegram app"
 		return nil
 	case m.saving[m.openID] > 0:
 		m.status = savingNote
@@ -844,7 +845,10 @@ func (m *model) addMessage(msg core.Message, chat *core.Chat, edit bool) {
 		if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.ID }); i >= 0 {
 			h.msgs[i] = msg
 		} else if !edit {
-			h.msgs = append(h.msgs, msg)
+			// By ID, which is the order Telegram gave them, whatever order
+			// they arrive in.
+			at, _ := slices.BinarySearchFunc(h.msgs, msg.ID, func(o core.Message, id int) int { return cmp.Compare(o.ID, id) })
+			h.msgs = slices.Insert(h.msgs, at, msg)
 			if msg.ChatID == m.openID && m.scroll > 0 {
 				m.scroll = 0
 			}

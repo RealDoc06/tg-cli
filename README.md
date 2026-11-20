@@ -128,7 +128,7 @@ Run `tg` with no arguments.
 | `esc` | Cancel the reply or the edit |
 | `q` `ctrl+c` | Quit |
 
-The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages on several lines are edited elsewhere. New messages arrive live.
+The mouse works too: click a chat, scroll either pane, right click a message to reply, edit, copy its text or copy its ID. Copying uses OSC 52, so it also works over SSH; inside tmux it needs `set -g set-clipboard on`. Edits are sent as plain text, so bold and links made in another app are lost, and messages the composer cannot hold as they are (several lines, special characters) are edited elsewhere. New messages arrive live.
 
 ### Themes
 

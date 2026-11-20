@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -120,8 +121,12 @@ func TestOpenChatDedupesAndStaysRead(t *testing.T) {
 	// A new message arriving out of order is still shown.
 	late := core.Message{ID: 9000, ChatID: chat.ID, From: "Someone", Date: time.Now(), Text: "late"}
 	m.Update(eventMsg(core.Event{Kind: core.EventMessage, Chat: chat, Message: late}))
-	if !slices.ContainsFunc(m.histories[chat.ID].msgs, func(o core.Message) bool { return o.ID == late.ID }) {
+	msgs := m.histories[chat.ID].msgs
+	if !slices.ContainsFunc(msgs, func(o core.Message) bool { return o.ID == late.ID }) {
 		t.Error("a new message that arrived out of order was dropped")
+	}
+	if !slices.IsSortedFunc(msgs, func(a, b core.Message) int { return cmp.Compare(a.ID, b.ID) }) {
+		t.Error("the history is not in message order")
 	}
 	if unread := m.chat(chat.ID).Unread; unread != 0 {
 		t.Errorf("open chat has %d unread", unread)
