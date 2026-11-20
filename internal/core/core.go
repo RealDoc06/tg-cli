@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,9 @@ type Message struct {
 	Service bool      `json:"service,omitempty"`
 	// Picture tells whether and how the TUI can draw the media.
 	Picture PictureKind `json:"-"`
+	// PictureSize is the media's size in pixels, zero when unknown. The TUI
+	// sets room aside for the picture with it, so nothing moves when it loads.
+	PictureSize image.Point `json:"-"`
 }
 
 // MediaPhoto is the Media of a message that carries a photo.

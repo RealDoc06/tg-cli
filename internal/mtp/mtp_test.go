@@ -143,7 +143,7 @@ func TestMediaSummary(t *testing.T) {
 		"sticker 😪":        videoSticker,
 	}
 	for want, media := range cases {
-		if got, _ := mediaSummary(media); got != want {
+		if got, _, _ := mediaSummary(media); got != want {
 			t.Errorf("mediaSummary(%T) = %q, want %q", media, got, want)
 		}
 	}
@@ -152,7 +152,7 @@ func TestMediaSummary(t *testing.T) {
 		&tg.MessageMediaPhoto{Spoiler: true},
 		&tg.MessageMediaDocument{Spoiler: true, Document: &tg.Document{Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeVideo{Duration: 3}}}},
 	} {
-		if _, kind := mediaSummary(media); kind != core.NoPicture {
+		if _, kind, _ := mediaSummary(media); kind != core.NoPicture {
 			t.Errorf("spoiler %T is drawn", media)
 		}
 	}
