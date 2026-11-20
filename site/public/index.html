@@ -181,11 +181,7 @@ pre .cur { background: var(--text); }
 
 /* The install command is the same panel, with the systems as its tabs. */
 .cmd { display: flex; align-items: center; gap: .75rem; padding: .5rem .5rem .5rem 1.1rem; }
-.cmd code { flex: 1; min-width: 0; font-size: clamp(.8rem, 1.4vw, .875rem); white-space: pre; overflow-x: auto; container-type: inline-size; --chars: 46; }
-/* The command stays on one line: on narrow screens its type shrinks to fit.
-   --chars is the command's length, set by the script, and a Geist Mono
-   character is a little over .6em wide. */
-.cmd code > span { font-size: min(1em, 100cqi / (var(--chars) * .62)); }
+.cmd code { flex: 1; min-width: 0; font-size: clamp(.8rem, 1.4vw, .875rem); white-space: pre; overflow-x: auto; }   /* one line, scrolls sideways on narrow screens */
 /* Copy: once the command is copied the icon shrinks away while a check draws
    itself in its place, on green. Both icons share one grid cell. */
 .copy {
@@ -506,7 +502,6 @@ function selectSystem(name) {
   press(systemTabs.find((tab) => tab.dataset.os === name));
   document.getElementById('install-prompt').textContent = system.prompt;
   document.getElementById('install-cmd').innerHTML = paintCommand(system.command);
-  document.querySelector('.cmd code').style.setProperty('--chars', system.prompt.length + system.command.length);
   document.getElementById('install-note').textContent = system.note;
 }
 for (const tab of systemTabs) {
