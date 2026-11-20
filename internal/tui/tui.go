@@ -435,7 +435,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		before := len(m.chats)
 		for _, c := range msg.chats {
-			if m.chat(c.ID) == nil { // pages can overlap when chats move
+			if have := m.chat(c.ID); have != nil { // pages can overlap when chats move
+				// A chat a live message added first lacks what was read.
+				have.ReadOutbox = max(have.ReadOutbox, c.ReadOutbox)
+			} else {
 				m.chats = append(m.chats, c)
 			}
 		}
@@ -551,7 +554,13 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 
 	case eventMsg:
 		ev := core.Event(msg)
-		if ev.Kind == core.EventReady {
+		switch ev.Kind {
+		case core.EventReady:
+			return nil
+		case core.EventRead:
+			if c := m.chat(ev.Chat.ID); c != nil {
+				c.ReadOutbox = max(c.ReadOutbox, ev.Chat.ReadOutbox)
+			}
 			return nil
 		}
 		m.addMessage(ev.Message, &ev.Chat, ev.Kind == core.EventEdit)

@@ -105,7 +105,7 @@ func (b *backend) Chats(ctx context.Context, q core.ChatQuery) ([]core.Chat, err
 			if !known {
 				chat.Title = "Unavailable chat" // banned from it, or it was deleted
 			}
-			chat.Unread, chat.Pinned = d.UnreadCount, d.Pinned
+			chat.Unread, chat.Pinned, chat.ReadOutbox = d.UnreadCount, d.Pinned, d.ReadOutboxMaxID
 			if m, ok := last[key{id, d.TopMessage}]; ok {
 				chat.Last = &m
 				req.OffsetID, req.OffsetDate = m.ID, int(m.Date.Unix())
@@ -643,6 +643,18 @@ func (b *backend) emit(kind core.EventKind, e tg.Entities, raw tg.MessageClass) 
 	chat, _ := b.peers.chat(msg.ChatID)
 	chat.ID = msg.ChatID
 	(*fn)(core.Event{Kind: kind, Chat: chat, Message: msg})
+}
+
+// emitRead forwards that the other side of a chat read the account's
+// messages up to maxID.
+func (b *backend) emitRead(chatID int64, maxID int) {
+	fn := b.onEvent.Load()
+	if fn == nil {
+		return
+	}
+	chat, _ := b.peers.chat(chatID)
+	chat.ID, chat.ReadOutbox = chatID, maxID
+	(*fn)(core.Event{Kind: core.EventRead, Chat: chat})
 }
 
 func newSender(api *tg.Client) *message.Sender {

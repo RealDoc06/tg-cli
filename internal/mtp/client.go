@@ -145,6 +145,14 @@ func Run(ctx context.Context, opts Options, fn func(context.Context, core.Backen
 			b.emit(core.EventEdit, e, msg)
 			return nil
 		})
+		dispatcher.OnReadHistoryOutbox(func(_ context.Context, _ tg.Entities, u *tg.UpdateReadHistoryOutbox) error {
+			b.emitRead(chatIDOf(u.Peer), u.MaxID)
+			return nil
+		})
+		dispatcher.OnReadChannelOutbox(func(_ context.Context, _ tg.Entities, u *tg.UpdateReadChannelOutbox) error {
+			b.emitRead(channelChatID(u.ChannelID), u.MaxID)
+			return nil
+		})
 
 		err = fn(ctx, b)
 		if saveErr := b.peers.save(); err == nil {

@@ -1124,3 +1124,21 @@ func TestClickPressesBotButtons(t *testing.T) {
 		t.Fatalf("an answer to an earlier press replaced the note with %q", m.note)
 	}
 }
+
+// A message of the account shows one check until the other side reads it.
+func TestReadReceiptTurnsIntoTwoChecks(t *testing.T) {
+	m := loaded(t, 100, 30)
+	open(t, m, slices.IndexFunc(m.visible(), func(c *core.Chat) bool { return c.Title == "Dmitri Volkov" }))
+	last := func() string {
+		lines := m.messageLines(m.histories[m.openID], m.conversationWidth())
+		return ansi.Strip(lines[len(lines)-1].text)
+	}
+	if got := last(); !strings.HasSuffix(got, " ✓ ") {
+		t.Fatalf("unread message %q, want one check", got)
+	}
+	h := m.histories[m.openID]
+	m.Update(eventMsg(core.Event{Kind: core.EventRead, Chat: core.Chat{ID: m.openID, ReadOutbox: h.msgs[len(h.msgs)-1].ID}}))
+	if got := last(); !strings.HasSuffix(got, " ✓✓ ") {
+		t.Fatalf("read message %q, want two checks", got)
+	}
+}

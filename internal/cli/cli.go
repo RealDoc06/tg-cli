@@ -716,6 +716,9 @@ func (a *app) watch(ctx context.Context, be core.Backend, opts watchOptions) (wa
 			}
 			return
 		}
+		if ev.Kind == core.EventRead {
+			return // watch reports messages only
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if catchingUp {
