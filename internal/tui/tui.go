@@ -318,9 +318,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Results and live updates share one connection, in the order Telegram
-		// applied them: an edit from another app that arrived before this
-		// result was overwritten by it.
+		// Show the saved text at once. The live updates stay authoritative:
+		// they carry this edit and any later one in the order Telegram
+		// applied them, and each replaces the whole message.
 		if h := m.histories[msg.chatID]; h != nil {
 			if i := slices.IndexFunc(h.msgs, func(o core.Message) bool { return o.ID == msg.id }); i >= 0 {
 				h.msgs[i].Text, h.msgs[i].Edited = msg.text, true
