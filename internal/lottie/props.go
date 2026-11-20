@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"sort"
 )
 
 // numProp is a number or a vector that may be animated. Lottie writes it as
@@ -169,6 +170,10 @@ func path(data json.RawMessage) (bezier, error) {
 	return b, err
 }
 
+// maxComponents bounds how many components of a value are interpolated: a
+// gradient of 40 stops takes 240, a position 2.
+const maxComponents = 256
+
 // at returns the value at a frame, def when the property is absent.
 func (p *numProp) at(frame float64, def ...float64) []float64 {
 	if p.split != nil {
@@ -178,7 +183,7 @@ func (p *numProp) at(frame float64, def ...float64) []float64 {
 		return def
 	}
 	return interpolate(p.keys, frame, func(a, b []float64, ease func(dim int) float64, k *keyframe[[]float64]) []float64 {
-		out := make([]float64, min(len(a), len(b)))
+		out := make([]float64, min(len(a), len(b), maxComponents))
 		// A position moves along the curve its tangents draw.
 		if len(out) >= 2 && len(k.to) >= 2 && len(k.ti) >= 2 && (k.to[0] != 0 || k.to[1] != 0 || k.ti[0] != 0 || k.ti[1] != 0) {
 			u := ease(0)
@@ -231,10 +236,9 @@ func interpolate[T any](keys []keyframe[T], frame float64, mix func(a, b T, ease
 	if len(keys) == 1 || frame <= keys[0].t {
 		return keys[0].start
 	}
-	i := len(keys) - 1
-	for i > 0 && keys[i].t > frame {
-		i--
-	}
+	// The last key at or before frame. Files from strangers may list them
+	// out of order: any key found then will do, as long as it is found fast.
+	i := max(0, sort.Search(len(keys), func(j int) bool { return keys[j].t > frame })-1)
 	k := &keys[i]
 	if i == len(keys)-1 {
 		return k.start // parseKeys filled a bare last key from the one before

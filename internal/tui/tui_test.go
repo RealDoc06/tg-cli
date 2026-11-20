@@ -871,3 +871,47 @@ func TestNewPicturesTakeFreeIDs(t *testing.T) {
 		t.Errorf("took ID %d, want 5", id)
 	}
 }
+
+// On a narrow terminal the chat list hides the conversation. Pictures in it
+// stay protected from eviction, and the user comes back to the same lines.
+func TestHiddenConversationKeepsItsPictures(t *testing.T) {
+	m := loaded(t, narrowWidth-4, 30)
+	m.graphics = true
+	open(t, m, 1) // Homelab, with a photo and a video
+	m.images = map[imageKey]shown{}
+	m.imageBytes = 0
+	m.scroll = 2
+	upload(m, m.loadPictures())
+	reading := func() string {
+		h := m.histories[m.openID]
+		lines := m.messageLines(h, m.conversationWidth())
+		start, end, _, _ := m.shown(len(lines))
+		var text []string
+		for _, l := range lines[start:end] {
+			text = append(text, l.text)
+		}
+		return strings.Join(text, "\n")
+	}
+	var inView []imageKey
+	for key := range m.onScreen() {
+		if m.images[key].id != 0 && key.msg != 0 {
+			inView = append(inView, key)
+		}
+	}
+	if len(inView) == 0 {
+		t.Fatal("no picture in view")
+	}
+	before := reading()
+
+	m.setFocus(focusChats) // the list takes the screen
+	m.imageBytes += imageBudget
+	m.evict()
+	for _, key := range inView {
+		if m.images[key].id == 0 {
+			t.Errorf("picture %v was freed while hidden", key)
+		}
+	}
+	if reading() != before {
+		t.Error("the conversation moved while hidden")
+	}
+}

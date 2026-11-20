@@ -321,6 +321,9 @@ func (b *builder) spend(n int) bool {
 }
 
 func (b *builder) group(items []shape, m affine, opacity float64, styles []*style, trims []*trim) {
+	if !b.spend(len(items)) { // walked twice, even the hidden ones
+		return
+	}
 	for i := range items {
 		if it := &items[i]; it.Type == "tr" {
 			t := it.transform()

@@ -996,7 +996,7 @@ func (m *model) keepView(msgID int, change func()) {
 	}
 	change()
 	if end > top {
-		m.scroll += len(m.messageLines(h, rw)) - len(before)
+		m.scroll = max(0, m.scroll+len(m.messageLines(h, rw))-len(before))
 	}
 }
 
@@ -1284,7 +1284,10 @@ func (m *model) evict() {
 // view and the media of the messages in view.
 func (m *model) onScreen() map[imageKey]bool {
 	keys := map[imageKey]bool{}
-	lw, rw := m.layout()
+	// A conversation hidden by the chat list on a narrow terminal shows the
+	// same lines when it comes back: they stay protected.
+	lw, _ := m.layout()
+	rw := m.conversationWidth()
 	if lw > 0 {
 		chats := m.visible()
 		for _, c := range chats[min(m.top, len(chats)):min(len(chats), m.top+m.listRows())] {
