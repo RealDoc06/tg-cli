@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"image/draw"
 	"math"
+	"slices"
 
 	"golang.org/x/image/vector"
 )
@@ -459,7 +460,7 @@ func trimPaths(paths []polyline, start, end, offset float64) [][]polyline {
 	for i, p := range paths {
 		from, to := at/total, (at+lengths[i])/total
 		at += lengths[i]
-		if ranges[0][0] <= from && to <= ranges[0][1] {
+		if lengths[i] > 0 && slices.ContainsFunc(ranges, func(r [2]float64) bool { return r[0] <= from && to <= r[1] }) {
 			out[i] = []polyline{p} // kept whole, a closed path stays closed
 			continue
 		}
