@@ -181,7 +181,11 @@ pre .cur { background: var(--text); }
 
 /* The install command is the same panel, with the systems as its tabs. */
 .cmd { display: flex; align-items: center; gap: .75rem; padding: .5rem .5rem .5rem 1.1rem; }
-.cmd code { flex: 1; min-width: 0; font-size: clamp(.8rem, 1.4vw, .875rem); }
+.cmd code { flex: 1; min-width: 0; font-size: clamp(.8rem, 1.4vw, .875rem); white-space: pre; overflow-x: auto; container-type: inline-size; --chars: 46; }
+/* The command stays on one line: on narrow screens its type shrinks to fit.
+   --chars is the command's length, set by the script, and a Geist Mono
+   character is a little over .6em wide. */
+.cmd code > span { font-size: min(1em, 100cqi / (var(--chars) * .62)); }
 /* Copy: once the command is copied the icon shrinks away while a check draws
    itself in its place, on green. Both icons share one grid cell. */
 .copy {
@@ -265,7 +269,7 @@ footer a:hover { color: var(--fg); }
       <span class="sr" role="status" id="copy-status"></span>
     </div>
   </div>
-  <p class="note"><span id="phone-note" hidden>Run it on your computer. </span>Then <a href="https://github.com/RealDoc06/tg-cli#install"><code>tg login</code></a>. <span id="install-note">macOS and Linux.</span><noscript> On Windows, see the <a href="https://github.com/RealDoc06/tg-cli#install">README</a>.</noscript></p>
+  <p class="note">Then <a href="https://github.com/RealDoc06/tg-cli#install"><code>tg login</code></a>. <span id="install-note">macOS and Linux.</span><noscript> On Windows, see the <a href="https://github.com/RealDoc06/tg-cli#install">README</a>.</noscript></p>
 </div>
 
 <figure class="wrap">
@@ -443,9 +447,6 @@ const SYSTEMS = {
 };
 
 const platform = `${navigator.userAgentData?.platform ?? ''} ${navigator.platform ?? ''} ${navigator.userAgent}`;
-// tg does not run on phones: say so, and still show a command.
-const handheld = /android|iphone|ipad|ipod/i.test(platform) || (/mac/i.test(platform) && navigator.maxTouchPoints > 1); // iPadOS says it is a Mac
-document.getElementById('phone-note').hidden = !handheld;
 
 const detectSystem = () => /windows|win32|win64/i.test(platform) ? 'windows' : 'unix';
 
@@ -462,7 +463,7 @@ function paintCommand(text) {
     if (program) { program = false; return paint('fn', token); }
     if (token.startsWith('"')) return paint('str', token);
     if (token.startsWith('-')) return paint('flag', token);
-    return escapeHtml(token).replaceAll('/', '/<wbr>'); // a long URL wraps at its slashes
+    return escapeHtml(token);
   }).join('');
 }
 
@@ -505,6 +506,7 @@ function selectSystem(name) {
   press(systemTabs.find((tab) => tab.dataset.os === name));
   document.getElementById('install-prompt').textContent = system.prompt;
   document.getElementById('install-cmd').innerHTML = paintCommand(system.command);
+  document.querySelector('.cmd code').style.setProperty('--chars', system.prompt.length + system.command.length);
   document.getElementById('install-note').textContent = system.note;
 }
 for (const tab of systemTabs) {
