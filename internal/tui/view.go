@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -159,8 +160,8 @@ func (m *model) chatRow(c *core.Chat, selected bool, w int) []string {
 // avatar returns the two lines of a chat's picture: the real image when the
 // terminal can draw it and it is loaded, a colored initials badge otherwise.
 func (m *model) avatar(c *core.Chat) []string {
-	if id := m.avatars[c.ID]; id != 0 {
-		return termimg.Placeholder(id, avatarCols, avatarRows)
+	if img := m.images[imageKey{chat: c.ID}]; img.id != 0 {
+		return termimg.Placeholder(img.id, avatarCols, avatarRows)
 	}
 	color := m.st.peer(c.ID)
 	fill := lipgloss.NewStyle().Background(color).Foreground(m.st.theme.Background).Bold(true)
@@ -194,7 +195,7 @@ func (m *model) conversation(w, h int) []string {
 
 	lines := m.messageLines(hist, w)
 	if !hist.loaded {
-		lines = []string{m.st.muted.Render(" loading")}
+		lines = []msgLine{{m.st.muted.Render(" loading"), -1}}
 	}
 	view := h - 2
 	end := max(0, len(lines)-m.scroll)
@@ -203,21 +204,47 @@ func (m *model) conversation(w, h int) []string {
 		rows = append(rows, strings.Repeat(" ", w))
 	}
 	for _, l := range lines[start:end] {
-		rows = append(rows, fit(l, w))
+		rows = append(rows, fit(l.text, w))
 	}
 
-	m.input.SetWidth(w - 4)
-	m.input.Placeholder = "message " + c.Title
+	// An attachment shows in the prompt, the text becomes its caption.
+	m.input.Prompt, m.input.Placeholder = "> ", "message "+c.Title
+	switch {
+	case m.attach.Photo != nil:
+		m.input.Prompt, m.input.Placeholder = "[image] > ", "add a caption"
+	case m.attach.File != "":
+		name := strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return -1
+			}
+			return r
+		}, filepath.Base(m.attach.File))
+		m.input.Prompt, m.input.Placeholder = "["+ansi.Truncate(name, max(4, w/3), "…")+"] > ", "add a caption"
+	}
+	m.input.SetWidth(max(1, w-2-ansi.StringWidth(m.input.Prompt)))
+	m.input.SetCursor(m.input.Position()) // SetWidth alone keeps the old visible window
 	rows = append(rows, fit(" "+m.input.View(), w))
 	return rows
 }
 
+// photoIndent is the hanging indent of message bodies: " HH:MM ".
+const photoIndent = 7
+
+// msgLine is one line of the conversation, msg is the index of the message
+// it belongs to, -1 for date lines.
+type msgLine struct {
+	text string
+	msg  int
+}
+
 // messageLines lays the history out for a pane of width w: a date line per
-// day, then "HH:MM Name: text" wrapped with a hanging indent.
-func (m *model) messageLines(h *history, w int) []string {
-	const indent = 7 // " HH:MM "
+// day, then "HH:MM Name: text" wrapped with a hanging indent, and the photo
+// below when it is loaded.
+func (m *model) messageLines(h *history, w int) []msgLine {
+	const indent = photoIndent
+	pad := strings.Repeat(" ", indent)
 	byID := make(map[int]*core.Message, len(h.msgs))
-	var lines []string
+	var lines []msgLine
 	var day string
 	for i := range h.msgs {
 		msg := &h.msgs[i]
@@ -225,22 +252,28 @@ func (m *model) messageLines(h *history, w int) []string {
 
 		if d := msg.Date.Format("Mon 2 Jan 2006"); d != day {
 			day = d
-			lines = append(lines, center(m.st.muted.Render(d), w))
+			lines = append(lines, msgLine{center(m.st.muted.Render(d), w), -1})
 		}
 		if ref := byID[msg.ReplyTo]; ref != nil {
 			quote := ansi.Truncate(firstWord(ref.From)+": "+strings.Join(strings.Fields(ref.Preview()), " "), w-indent-3, "…")
-			lines = append(lines, strings.Repeat(" ", indent)+m.st.muted.Render("↪ "+quote))
+			lines = append(lines, msgLine{pad + m.st.muted.Render("↪ "+quote), i})
 		}
 
 		name := lipgloss.NewStyle().Foreground(m.st.peer(msg.FromID)).Render(msg.From)
 		if msg.Out {
 			name = m.st.accent.Render("You")
 		}
+		// A photo that is drawn replaces its "[photo]" label, unless the
+		// pane became too narrow for it.
+		photo := m.images[imageKey{msg.ChatID, msg.ID}]
+		if msg.Media != core.MediaPhoto || photo.cols > w-indent-1 {
+			photo = shown{}
+		}
 		body := msg.Text
-		if msg.Media != "" {
+		if msg.Media != "" && photo.id == 0 {
 			body = strings.TrimSpace(m.st.muted.Render("["+msg.Media+"]") + " " + body)
 		}
-		text := name + ": " + body
+		text := strings.TrimSpace(name + ": " + body)
 		if msg.Service {
 			text = m.st.muted.Render(msg.From + " " + msg.Text)
 		}
@@ -249,11 +282,16 @@ func (m *model) messageLines(h *history, w int) []string {
 		}
 
 		for j, l := range strings.Split(ansi.Wrap(text, max(10, w-indent-1), ""), "\n") {
-			prefix := strings.Repeat(" ", indent)
+			prefix := pad
 			if j == 0 {
 				prefix = " " + m.st.muted.Render(msg.Date.Format("15:04")) + " "
 			}
-			lines = append(lines, prefix+l)
+			lines = append(lines, msgLine{prefix + l, i})
+		}
+		if photo.id != 0 {
+			for _, l := range termimg.Placeholder(photo.id, photo.cols, photo.rows) {
+				lines = append(lines, msgLine{pad + l, i})
+			}
 		}
 	}
 	return lines
@@ -264,7 +302,10 @@ func (m *model) statusLine() string {
 	hints := [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "compose"}, {"q", "quit"}}
 	switch m.focus {
 	case focusInput:
-		hints = [][2]string{{"enter", "send"}, {"pgup/pgdn", "scroll"}, {"esc", "chats"}, {"ctrl+c", "quit"}}
+		hints = [][2]string{{"enter", "send"}, {"ctrl+v", "paste image"}, {"pgup/pgdn", "scroll"}, {"esc", "chats"}, {"ctrl+c", "quit"}}
+		if m.attached() {
+			hints[1] = [2]string{"backspace", "remove attachment"}
+		}
 	case focusFilter:
 		hints = [][2]string{{"type", "to filter"}, {"enter", "open"}, {"esc", "clear"}}
 	}

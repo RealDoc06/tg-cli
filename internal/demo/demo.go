@@ -27,8 +27,10 @@ type Backend struct {
 	mu       sync.Mutex
 	chats    []core.Chat
 	messages map[int64][]core.Message
-	nextID   int
-	events   chan core.Event
+	// photos holds the images sent as photos, by message ID.
+	photos map[int][]byte
+	nextID int
+	events chan core.Event
 }
 
 // channelBase is where supergroup IDs start, as on Telegram.
@@ -105,7 +107,7 @@ var fixtures = []fixture{
 
 // New returns a demo backend populated with the fixtures.
 func New() *Backend {
-	b := &Backend{messages: map[int64][]core.Message{}, nextID: 1, events: make(chan core.Event, 16)}
+	b := &Backend{messages: map[int64][]core.Message{}, photos: map[int][]byte{}, nextID: 1, events: make(chan core.Event, 16)}
 	for _, f := range fixtures {
 		for _, line := range f.lines {
 			parts := strings.SplitN(line, "|", 3)
@@ -202,7 +204,18 @@ func (b *Backend) Send(_ context.Context, chatID int64, req core.SendRequest) (c
 		return core.Message{}, fmt.Errorf("unknown chat %d", chatID)
 	}
 	m := core.Message{ID: b.nextID, ChatID: chatID, From: self.Name, FromID: self.ID, Out: true, Date: time.Now(), Text: req.Text, ReplyTo: req.ReplyTo}
-	if req.File != "" {
+	photo := req.Photo
+	if photo == nil && core.IsPhotoFile(req.File) {
+		var err error
+		if photo, err = os.ReadFile(req.File); err != nil {
+			return core.Message{}, err
+		}
+	}
+	switch {
+	case photo != nil:
+		m.Media = core.MediaPhoto
+		b.photos[m.ID] = photo
+	case req.File != "":
 		m.Media = "file: " + filepath.Base(req.File)
 	}
 	b.nextID++
@@ -268,17 +281,45 @@ func (b *Backend) Avatar(_ context.Context, chat core.Chat) ([]byte, error) {
 	}
 	const size = 160
 	hue := float64(chat.PhotoID) * 47
-	img := image.NewNRGBA(image.Rect(0, 0, size, size))
-	for y := range size {
-		for x := range size {
-			t := float64(x+y) / (2 * size)
-			ring := math.Hypot(float64(x)-size*0.5, float64(y)-size*0.42) < size*0.2 ||
-				math.Hypot(float64(x)-size*0.5, float64(y)-size*1.02) < size*0.42
-			c := hsl(hue+t*60, 0.65, 0.35+t*0.2)
-			if ring {
-				c = hsl(hue+40, 0.5, 0.82)
-			}
-			img.SetNRGBA(x, y, c)
+	return paint(size, size, func(x, y float64) color.NRGBA {
+		t := (x + y) / (2 * size)
+		if math.Hypot(x-size*0.5, y-size*0.42) < size*0.2 || math.Hypot(x-size*0.5, y-size*1.02) < size*0.42 {
+			return hsl(hue+40, 0.5, 0.82) // head and shoulders
+		}
+		return hsl(hue+t*60, 0.65, 0.35+t*0.2)
+	})
+}
+
+// Photo returns what was sent as a photo, or paints a landscape: a sky, a sun
+// and hills, different for every message.
+func (b *Backend) Photo(_ context.Context, chatID int64, msgID int) ([]byte, error) {
+	b.mu.Lock()
+	sent, ok := b.photos[msgID]
+	b.mu.Unlock()
+	if ok {
+		return sent, nil
+	}
+	const w, h = 640, 420
+	hue := float64(msgID) * 67
+	return paint(w, h, func(x, y float64) color.NRGBA {
+		hill := h*0.62 + math.Sin(x/w*5+float64(msgID))*h*0.06
+		switch {
+		case y > hill:
+			return hsl(hue+120, 0.45, 0.32-(y-hill)/h*0.3)
+		case math.Hypot(x-w*0.7, y-h*0.3) < h*0.11:
+			return hsl(45, 0.95, 0.75)
+		default:
+			return hsl(hue+200, 0.6, 0.45+y/h*0.35)
+		}
+	})
+}
+
+// paint encodes a w x h PNG whose pixels come from at.
+func paint(w, h int, at func(x, y float64) color.NRGBA) ([]byte, error) {
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := range h {
+		for x := range w {
+			img.SetNRGBA(x, y, at(float64(x), float64(y)))
 		}
 	}
 	var buf bytes.Buffer

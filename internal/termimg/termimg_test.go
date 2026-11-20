@@ -30,6 +30,45 @@ func TestPlaceholderOccupiesItsCells(t *testing.T) {
 	if lines[0] == lines[1] {
 		t.Error("rows are not distinguished")
 	}
+	for _, line := range Placeholder(1, MaxCells, MaxCells) {
+		if w := ansi.StringWidth(line); w != MaxCells {
+			t.Fatalf("a %d cell wide line is %d cells", MaxCells, w)
+		}
+	}
+}
+
+// Fit must keep a picture's proportions inside the box it is given: a wide
+// one uses every column, a tall one every row.
+func TestFitKeepsProportions(t *testing.T) {
+	encode := func(w, h int) []byte {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, w, h))); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	cases := []struct {
+		w, h, cols, rows int
+	}{
+		{800, 400, 36, 9},   // 2:1, cells are twice as tall as wide
+		{400, 800, 7, 14},   // tall, bound by rows
+		{100, 100, 28, 14},  // square
+		{4000, 10, 36, 1},   // never less than one row
+		{900, 300, 300, 64}, // never more cells than placeholders can address
+	}
+	for _, c := range cases {
+		_, cols, rows, err := Fit(encode(c.w, c.h), c.cols, c.rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ratio := float64(c.w) / float64(c.h) * cellAspect // columns per row
+		if cols > min(c.cols, MaxCells) || rows > min(c.rows, MaxCells) || (cols != min(c.cols, MaxCells) && rows != min(c.rows, MaxCells)) {
+			t.Errorf("%dx%d in %dx%d: got %dx%d cells", c.w, c.h, c.cols, c.rows, cols, rows)
+		}
+		if got := float64(cols) / float64(rows); rows > 1 && (got < ratio*0.85 || got > ratio*1.15) {
+			t.Errorf("%dx%d: %dx%d cells distort it", c.w, c.h, cols, rows)
+		}
+	}
 }
 
 func TestTransmitChunksLargeImages(t *testing.T) {
