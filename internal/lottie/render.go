@@ -127,7 +127,7 @@ func (r *renderer) layer(dst *image.RGBA, l *layer, frame float64, base affine, 
 	switch l.Type {
 	case layerShape:
 		b := builder{frame: local, work: &r.raster.work}
-		b.group(l.Shapes, m, 1, nil, nil)
+		b.group(l.Shapes, m, 1)
 		b.draw(r.raster, out)
 	case layerSolid:
 		c, ok := hexColor(l.SolidColor)
@@ -312,6 +312,10 @@ type builder struct {
 	trims  []*trim  // in the order met: outer ones first
 	styles []*style // bottom one first, the order they are painted in
 	work   *int     // the frame's work, see workBudget
+	// active holds the styles and trims that apply where the walk is: those
+	// met so far in the groups it is in. Each group pops its own on return.
+	activeStyles []*style
+	activeTrims  []*trim
 }
 
 // spend adds to the frame's work and reports whether it is still in budget.
@@ -320,10 +324,12 @@ func (b *builder) spend(n int) bool {
 	return *b.work <= workBudget
 }
 
-func (b *builder) group(items []shape, m affine, opacity float64, styles []*style, trims []*trim) {
+func (b *builder) group(items []shape, m affine, opacity float64) {
 	if !b.spend(len(items)) { // walked twice, even the hidden ones
 		return
 	}
+	styles, trims := len(b.activeStyles), len(b.activeTrims)
+	defer func() { b.activeStyles, b.activeTrims = b.activeStyles[:styles], b.activeTrims[:trims] }()
 	for i := range items {
 		if it := &items[i]; it.Type == "tr" {
 			t := it.transform()
@@ -331,8 +337,6 @@ func (b *builder) group(items []shape, m affine, opacity float64, styles []*styl
 			opacity *= t.Opacity.scalar(b.frame, 100) / 100
 		}
 	}
-	// Appends below must not land in the caller's lists.
-	styles, trims = slices.Clip(styles), slices.Clip(trims)
 	for i := len(items) - 1; i >= 0; i-- {
 		it := &items[i]
 		if it.Hidden {
@@ -341,7 +345,7 @@ func (b *builder) group(items []shape, m affine, opacity float64, styles []*styl
 		switch it.Type {
 		case "fl", "st", "gf", "gs":
 			s := &style{item: it, m: m, opacity: opacity}
-			styles = append(styles, s)
+			b.activeStyles = append(b.activeStyles, s)
 			b.styles = append(b.styles, s)
 		case "tm":
 			t := &trim{
@@ -350,24 +354,24 @@ func (b *builder) group(items []shape, m affine, opacity float64, styles []*styl
 				offset:   it.O.scalar(b.frame, 0) / 360,
 				together: it.TrimMode == 2,
 			}
-			trims = append(trims, t)
+			b.activeTrims = append(b.activeTrims, t)
 			b.trims = append(b.trims, t)
 		case "gr":
-			b.group(it.Items, m, opacity, styles, trims)
+			b.group(it.Items, m, opacity)
 		case "sh", "rc", "el":
 			// Each style and trim above holds the shape: files can multiply
 			// shapes by styles.
-			if !b.spend(1 + len(styles) + len(trims)) {
+			if !b.spend(1 + len(b.activeStyles) + len(b.activeTrims)) {
 				return
 			}
 			e := &entry{paths: []polyline{flatten(b.geometry(it), m)}}
 			if !b.spend(len(e.paths[0].pts)) {
 				return
 			}
-			for _, s := range styles {
+			for _, s := range b.activeStyles {
 				s.entries = append(s.entries, e)
 			}
-			for _, t := range trims {
+			for _, t := range b.activeTrims {
 				t.targets = append(t.targets, e)
 			}
 		}

@@ -143,7 +143,7 @@ func floats(data json.RawMessage) ([]float64, error) {
 	if data[0] == '[' {
 		var v []float64
 		err := json.Unmarshal(data, &v)
-		return v, err
+		return v[:min(len(v), maxComponents)], err
 	}
 	var v float64
 	err := json.Unmarshal(data, &v)
@@ -170,12 +170,30 @@ func path(data json.RawMessage) (bezier, error) {
 	return b, err
 }
 
-// maxComponents bounds how many components of a value are interpolated: a
-// gradient of 40 stops takes 240, a position 2.
+// maxComponents bounds how many components a value keeps when it is read
+// from the file: a gradient of 40 stops takes 240, a position 2.
 const maxComponents = 256
 
-// at returns the value at a frame, def when the property is absent.
+// at returns the value at a frame, def when the property is absent. Only as
+// many components as def has are interpolated, all of them without def:
+// files can pack hundreds into a value read for one.
 func (p *numProp) at(frame float64, def ...float64) []float64 {
+	width := len(def)
+	if width == 0 {
+		width = maxComponents
+	}
+	return p.value(frame, width, def)
+}
+
+// scalar returns the first component of the value at a frame.
+func (p *numProp) scalar(frame, def float64) float64 {
+	if v := p.value(frame, 1, nil); len(v) > 0 {
+		return v[0]
+	}
+	return def
+}
+
+func (p *numProp) value(frame float64, width int, def []float64) []float64 {
 	if p.split != nil {
 		return []float64{p.split[0].scalar(frame, 0), p.split[1].scalar(frame, 0)}
 	}
@@ -183,7 +201,7 @@ func (p *numProp) at(frame float64, def ...float64) []float64 {
 		return def
 	}
 	return interpolate(p.keys, frame, func(a, b []float64, ease func(dim int) float64, k *keyframe[[]float64]) []float64 {
-		out := make([]float64, min(len(a), len(b), maxComponents))
+		out := make([]float64, min(len(a), len(b), width))
 		// A position moves along the curve its tangents draw.
 		if len(out) >= 2 && len(k.to) >= 2 && len(k.ti) >= 2 && (k.to[0] != 0 || k.to[1] != 0 || k.ti[0] != 0 || k.ti[1] != 0) {
 			u := ease(0)
@@ -200,14 +218,6 @@ func (p *numProp) at(frame float64, def ...float64) []float64 {
 		}
 		return out
 	})
-}
-
-// scalar returns the first component of the value at a frame.
-func (p *numProp) scalar(frame, def float64) float64 {
-	if v := p.at(frame); len(v) > 0 {
-		return v[0]
-	}
-	return def
 }
 
 func (p *pathProp) at(frame float64) bezier {
