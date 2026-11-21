@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -353,30 +354,89 @@ func (b *backend) CreateGroup(ctx context.Context, title string) (core.Chat, err
 	return core.Chat{}, errors.New("Telegram did not return the new group")
 }
 
+// Search pages through Telegram's results until q.Limit matches. Global
+// search moves on with a (rate, chat, ID) cursor, search in one chat with the
+// last message ID. Paging stops when a page is empty, repeats the last one,
+// or ends the count Telegram gave.
 func (b *backend) Search(ctx context.Context, q core.SearchQuery) ([]core.Message, error) {
 	limit := q.Limit
-	if limit <= 0 || limit > pageSize {
+	if limit <= 0 {
 		limit = pageSize
 	}
-	var res tg.MessagesMessagesClass
-	var err error
-	if q.ChatID == 0 {
-		res, err = b.api.MessagesSearchGlobal(ctx, &tg.MessagesSearchGlobalRequest{
-			Q: q.Text, Filter: &tg.InputMessagesFilterEmpty{}, OffsetPeer: &tg.InputPeerEmpty{}, Limit: limit,
-		})
-	} else {
-		var peer tg.InputPeerClass
+	var peer tg.InputPeerClass
+	if q.ChatID != 0 {
+		var err error
 		if peer, err = b.peers.input(q.ChatID); err != nil {
 			return nil, err
 		}
-		res, err = b.api.MessagesSearch(ctx, &tg.MessagesSearchRequest{
-			Peer: peer, Q: q.Text, Filter: &tg.InputMessagesFilterEmpty{}, Limit: limit,
-		})
 	}
-	if err != nil {
-		return nil, err
+	// Telegram's bounds leave out the second they name, the query's include it.
+	var minDate, maxDate int
+	if !q.Since.IsZero() {
+		minDate = clampDate(q.Since.Unix() - 1)
 	}
-	out := b.messages(res)
+	if !q.Until.IsZero() {
+		maxDate = clampDate(q.Until.Unix() + 1)
+	}
+	global := tg.MessagesSearchGlobalRequest{
+		Q: q.Text, Filter: &tg.InputMessagesFilterEmpty{}, MinDate: minDate, MaxDate: maxDate,
+		OffsetPeer:     &tg.InputPeerEmpty{},
+		BroadcastsOnly: q.Kind == core.KindChannel, GroupsOnly: q.Kind == core.KindGroup, UsersOnly: q.Kind == core.KindUser,
+	}
+	inChat := tg.MessagesSearchRequest{Peer: peer, Q: q.Text, Filter: &tg.InputMessagesFilterEmpty{}, MinDate: minDate, MaxDate: maxDate}
+	var out []core.Message
+	var lastChat int64 // the chat of global.OffsetID
+	seen := 0
+	for len(out) < limit {
+		want := min(pageSize, limit-len(out))
+		var res tg.MessagesMessagesClass
+		var err error
+		if peer == nil {
+			global.Limit = want
+			res, err = b.api.MessagesSearchGlobal(ctx, &global)
+		} else {
+			inChat.Limit = want
+			res, err = b.api.MessagesSearch(ctx, &inChat)
+		}
+		if err != nil {
+			return nil, err
+		}
+		page, ok := res.AsModified()
+		if !ok {
+			break
+		}
+		last, ok := lastMessage(page.GetMessages())
+		if !ok {
+			break
+		}
+		chat := chatIDOf(last.GetPeerID())
+		// Results come newest first: a page that does not go past the
+		// cursor repeats what was already taken.
+		if peer != nil && inChat.OffsetID != 0 && last.GetID() >= inChat.OffsetID ||
+			peer == nil && last.GetID() == global.OffsetID && chat == lastChat {
+			break
+		}
+		out = append(out, b.messages(res)...)
+		seen += len(page.GetMessages())
+		if complete(res, seen) {
+			break
+		}
+		if peer != nil {
+			inChat.OffsetID = last.GetID()
+			continue
+		}
+		next, err := b.peers.input(chat)
+		if err != nil {
+			break
+		}
+		rate := last.GetDate() // what offset_rate falls back to without a next rate
+		if slice, ok := res.(*tg.MessagesMessagesSlice); ok {
+			if r, ok := slice.GetNextRate(); ok {
+				rate = r
+			}
+		}
+		global.OffsetRate, global.OffsetPeer, global.OffsetID, lastChat = rate, next, last.GetID(), chat
+	}
 	for i := range out {
 		if chat, ok := b.peers.chat(out[i].ChatID); ok {
 			out[i].Chat = chat.Title
@@ -384,6 +444,35 @@ func (b *backend) Search(ctx context.Context, q core.SearchQuery) ([]core.Messag
 	}
 	slices.Reverse(out)
 	return out, nil
+}
+
+// lastMessage is the oldest message of a page of results, skipping deleted ones.
+func lastMessage(raw []tg.MessageClass) (tg.NotEmptyMessage, bool) {
+	for i := len(raw) - 1; i >= 0; i-- {
+		if m, ok := raw[i].AsNotEmpty(); ok {
+			return m, true
+		}
+	}
+	return nil, false
+}
+
+// complete tells whether seen messages are all the results there are. A
+// count of 0 alongside messages means Telegram did not give one.
+func complete(res tg.MessagesMessagesClass, seen int) bool {
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		return true
+	case *tg.MessagesMessagesSlice:
+		return !r.Inexact && r.Count > 0 && seen >= r.Count
+	case *tg.MessagesChannelMessages:
+		return !r.Inexact && r.Count > 0 && seen >= r.Count
+	}
+	return false
+}
+
+// clampDate fits a Unix time in the 32 bits Telegram sends dates in.
+func clampDate(unix int64) int {
+	return int(min(max(unix, 1), math.MaxInt32))
 }
 
 func (b *backend) Avatar(ctx context.Context, chat core.Chat) ([]byte, error) {

@@ -463,12 +463,35 @@ func (a *app) searchCmd() *command {
 	c.long = `Search messages in every chat, or in one with --chat. Telegram does the
 matching: by whole words and their beginnings and inflections, not by
 substring, so "introduce" also finds "introducing". Newest matches are kept
-when there are more than --limit.`
+when there are more than --limit. --since and --until narrow it to a time
+range, --kind a search everywhere to one kind of chat.`
 	chatRef := c.flags.StringP("chat", "c", "", "search only in this chat")
 	limit := c.flags.IntP("limit", "n", 30, "maximum number of messages")
+	since := c.flags.String("since", "", "only messages from then on: 2026-11-01, 2026-11-01T15:04:05Z, or an age like 7d or 12h")
+	until := c.flags.String("until", "", "only messages until then, same forms. A day counts in full")
+	kind := c.flags.String("kind", "", "search everywhere only in chats of this kind: user (bots too), group or channel")
 	c.run = func(ctx context.Context, args []string) error {
+		q := core.SearchQuery{Text: strings.Join(args, " "), Limit: *limit, Kind: core.ChatKind(*kind)}
+		switch q.Kind {
+		case "", core.KindUser, core.KindGroup, core.KindChannel:
+		default:
+			return errUsage{fmt.Errorf("--kind %q: use user, group or channel", *kind)}
+		}
+		if q.Kind != "" && *chatRef != "" {
+			return errUsage{errors.New("--kind only applies to a search everywhere, drop --chat or --kind")}
+		}
+		now := time.Now()
+		var err error
+		if q.Since, err = parseWhen(*since, now, false); err != nil {
+			return errUsage{fmt.Errorf("--since: %w", err)}
+		}
+		if q.Until, err = parseWhen(*until, now, true); err != nil {
+			return errUsage{fmt.Errorf("--until: %w", err)}
+		}
+		if !q.Since.IsZero() && !q.Until.IsZero() && q.Since.After(q.Until) {
+			return errUsage{errors.New("--since is after --until, nothing can match: swap them")}
+		}
 		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
-			q := core.SearchQuery{Text: strings.Join(args, " "), Limit: *limit}
 			var chat *core.Chat
 			if *chatRef != "" {
 				resolved, err := be.Resolve(ctx, *chatRef)
@@ -493,6 +516,35 @@ when there are more than --limit.`
 		})
 	}
 	return c
+}
+
+// parseWhen reads a --since or --until value: a day, an RFC 3339 time, or an
+// age before now in days (7d), hours or minutes (12h, 30m). With endOfDay, a
+// day means its end, so --until 2026-11-01 includes that day. Empty is zero.
+// Times are cut to the second, as message dates are.
+func parseWhen(s string, now time.Time, endOfDay bool) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	now = now.Truncate(time.Second)
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		if n, err := strconv.Atoi(days); err == nil && n >= 0 {
+			return now.AddDate(0, 0, -n), nil
+		}
+	}
+	if age, err := time.ParseDuration(s); err == nil && age >= 0 {
+		return now.Add(-age).Truncate(time.Second), nil
+	}
+	if day, err := time.ParseInLocation(time.DateOnly, s, time.Local); err == nil {
+		if endOfDay {
+			day = day.AddDate(0, 0, 1).Add(-time.Second)
+		}
+		return day, nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.Truncate(time.Second), nil
+	}
+	return time.Time{}, fmt.Errorf("%q is not a date (2026-11-01), a time (2026-11-01T15:04:05Z) or an age (7d, 12h)", s)
 }
 
 func (a *app) markReadCmd() *command {

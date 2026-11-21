@@ -189,6 +189,11 @@ type SearchQuery struct {
 	Text   string
 	ChatID int64
 	Limit  int
+	// Since and Until bound the message dates when set.
+	Since, Until time.Time
+	// Kind, when set, keeps a search everywhere to chats of that kind.
+	// KindUser covers bots too, Telegram does not tell them apart here.
+	Kind ChatKind
 }
 
 // EventKind tells what happened in an Event.

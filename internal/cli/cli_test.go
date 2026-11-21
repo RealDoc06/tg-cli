@@ -99,6 +99,10 @@ func TestUsageErrors(t *testing.T) {
 		{"read", "alice", "--bogus"},
 		{"nope"},
 		{"send", "alice"}, // no text, stdin is not a pipe with content
+		{"search", "x", "--kind", "bot"},
+		{"search", "x", "--kind", "channel", "-c", "alice"},
+		{"search", "x", "--since", "yesterday"},
+		{"search", "x", "--since", "2026-11-02", "--until", "2026-11-01"},
 	} {
 		if err := run(t, args...); !errors.As(err, new(errUsage)) {
 			t.Errorf("tg %s: got %v, want a usage error", strings.Join(args, " "), err)
@@ -107,6 +111,35 @@ func TestUsageErrors(t *testing.T) {
 	// A wrong flag value must be reported without the shield byte leaking.
 	if err := run(t, "read", "alice", "-n", "-5x"); err == nil || strings.Contains(err.Error(), shield) {
 		t.Errorf("bad flag value: %q", err)
+	}
+}
+
+// A day passed to --until counts in full, so --since and --until with the
+// same day cover that day.
+func TestParseWhen(t *testing.T) {
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.Local)
+	for _, c := range []struct {
+		in       string
+		endOfDay bool
+		want     time.Time
+	}{
+		{"", false, time.Time{}},
+		{"7d", false, now.AddDate(0, 0, -7)},
+		{"12h", false, now.Add(-12 * time.Hour)},
+		{"1.5s", false, now.Add(-2 * time.Second)},
+		{"2026-11-01", false, time.Date(2026, 11, 1, 0, 0, 0, 0, time.Local)},
+		{"2026-11-01", true, time.Date(2026, 11, 1, 23, 59, 59, 0, time.Local)},
+		{"2026-11-01T15:04:05.5Z", true, time.Date(2026, 11, 1, 15, 4, 5, 0, time.UTC)},
+	} {
+		got, err := parseWhen(c.in, now, c.endOfDay)
+		if err != nil || !got.Equal(c.want) {
+			t.Errorf("parseWhen(%q, %v) = %v, %v, want %v", c.in, c.endOfDay, got, err, c.want)
+		}
+	}
+	for _, in := range []string{"yesterday", "-3d", "-2h", "7"} {
+		if _, err := parseWhen(in, now, false); err == nil {
+			t.Errorf("parseWhen(%q) accepted", in)
+		}
 	}
 }
 

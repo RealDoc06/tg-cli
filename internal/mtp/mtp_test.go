@@ -1,10 +1,15 @@
 package mtp
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
 
 	"github.com/RealDoc06/tg-cli/internal/core"
@@ -176,5 +181,110 @@ func TestTextLinks(t *testing.T) {
 	}
 	if !slices.Equal(links, want) {
 		t.Fatalf("textLinks = %+v, want %+v", links, want)
+	}
+}
+
+// fakeSearch answers searches from canned pages and records each request.
+type fakeSearch struct {
+	pages  []tg.MessagesMessagesClass
+	global []tg.MessagesSearchGlobalRequest
+	inChat []tg.MessagesSearchRequest
+}
+
+func (f *fakeSearch) Invoke(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+	switch req := in.(type) {
+	case *tg.MessagesSearchGlobalRequest:
+		f.global = append(f.global, *req)
+	case *tg.MessagesSearchRequest:
+		f.inChat = append(f.inChat, *req)
+	default:
+		return fmt.Errorf("unexpected request %T", in)
+	}
+	if len(f.pages) == 0 {
+		return errors.New("asked for a page past the end")
+	}
+	var buf bin.Buffer
+	box := tg.MessagesMessagesBox{Messages: f.pages[0]}
+	f.pages = f.pages[1:]
+	if err := box.Encode(&buf); err != nil {
+		return err
+	}
+	return out.Decode(&buf)
+}
+
+// channelPost is message id of channel 50, n minutes after the epoch.
+func channelPost(id, n int) tg.MessageClass {
+	return &tg.Message{ID: id, PeerID: &tg.PeerChannel{ChannelID: 50}, Date: n * 60, Message: "deal"}
+}
+
+// Global search moves on with the (rate, peer, ID) cursor of the previous
+// page, and stops once it has the count Telegram gave.
+func TestSearchGlobalPages(t *testing.T) {
+	channel := []tg.ChatClass{&tg.Channel{ID: 50, AccessHash: 500, Title: "Deals", Broadcast: true, Photo: &tg.ChatPhotoEmpty{}}}
+	fake := &fakeSearch{pages: []tg.MessagesMessagesClass{
+		&tg.MessagesMessagesSlice{Count: 5, NextRate: 77, Messages: []tg.MessageClass{channelPost(9, 9), channelPost(8, 8)}, Chats: channel},
+		&tg.MessagesMessagesSlice{Count: 5, NextRate: 66, Messages: []tg.MessageClass{channelPost(7, 7), channelPost(6, 6)}, Chats: channel},
+		&tg.MessagesMessagesSlice{Count: 6, Messages: []tg.MessageClass{channelPost(5, 5)}, Chats: channel},
+		&tg.MessagesMessagesSlice{Count: 6, Messages: []tg.MessageClass{channelPost(4, 4)}, Chats: channel},
+	}}
+	b := &backend{api: tg.NewClient(fake), peers: testStore(t)}
+
+	since, until := time.Unix(1000, 0), time.Unix(2000, 0)
+	msgs, err := b.Search(context.Background(), core.SearchQuery{Text: "deal", Limit: 101, Kind: core.KindChannel, Since: since, Until: until})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int
+	for _, m := range msgs {
+		ids = append(ids, m.ID)
+	}
+	if !slices.Equal(ids, []int{4, 5, 6, 7, 8, 9}) || msgs[0].Chat != "Deals" {
+		t.Fatalf("messages = %v, chat %q", ids, msgs[0].Chat)
+	}
+	if len(fake.global) != 4 {
+		t.Fatalf("%d requests, want 4", len(fake.global))
+	}
+	// Without a next rate, the date of the last message stands in.
+	if fake.global[3].OffsetRate != 5*60 || fake.global[3].OffsetID != 5 {
+		t.Errorf("fourth request cursor = rate %d, ID %d", fake.global[3].OffsetRate, fake.global[3].OffsetID)
+	}
+	// Telegram's bounds leave their own second out.
+	if first := fake.global[0]; first.MinDate != 999 || first.MaxDate != 2001 {
+		t.Errorf("date bounds = %d, %d", first.MinDate, first.MaxDate)
+	}
+	second := fake.global[1]
+	peer, ok := second.OffsetPeer.(*tg.InputPeerChannel)
+	if second.OffsetRate != 77 || second.OffsetID != 8 || !ok || peer.ChannelID != 50 || peer.AccessHash != 500 {
+		t.Errorf("second request cursor = rate %d, ID %d, peer %+v", second.OffsetRate, second.OffsetID, second.OffsetPeer)
+	}
+	if !second.BroadcastsOnly || second.Limit != 99 {
+		t.Errorf("second request = broadcasts only %v, limit %d", second.BroadcastsOnly, second.Limit)
+	}
+}
+
+// Search in one chat stops when Telegram repeats a page, without taking its
+// messages twice, and when it has handed over the exact count it gave.
+func TestSearchInChatStops(t *testing.T) {
+	chats := []tg.ChatClass{&tg.Channel{ID: 50, AccessHash: 500, Title: "Deals", Broadcast: true, Photo: &tg.ChatPhotoEmpty{}}}
+	page := &tg.MessagesChannelMessages{Count: 9, Messages: []tg.MessageClass{channelPost(4, 4), channelPost(3, 3)}, Chats: chats}
+	for _, c := range []struct {
+		name     string
+		pages    []tg.MessagesMessagesClass
+		requests int
+	}{
+		{"repeated page", []tg.MessagesMessagesClass{page, page}, 2},
+		{"count reached", []tg.MessagesMessagesClass{&tg.MessagesChannelMessages{Count: 2, Messages: page.Messages, Chats: chats}}, 1},
+	} {
+		fake := &fakeSearch{pages: c.pages}
+		b := &backend{api: tg.NewClient(fake), peers: testStore(t)}
+		b.peers.learn(tg.EntitiesFrom(nil, chats), 0)
+
+		msgs, err := b.Search(context.Background(), core.SearchQuery{Text: "deal", ChatID: channelChatID(50), Limit: 300})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(fake.inChat) != c.requests || len(msgs) != 2 {
+			t.Errorf("%s: %d requests, %d messages", c.name, len(fake.inChat), len(msgs))
+		}
 	}
 }
