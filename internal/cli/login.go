@@ -119,7 +119,11 @@ and tg will ask for them here.`
 			}
 		}
 		if _, err := config.LoadCredentials(); errors.Is(err, config.ErrNoCredentials) && os.Getenv("TG_TEST_DC") == "" {
-			fmt.Fprintln(os.Stderr, "Telegram API credentials are needed once. Create them at https://my.telegram.org/apps")
+			fmt.Fprint(os.Stderr, `Telegram needs an API ID and hash for tg, once.
+  1. Open https://my.telegram.org/apps and log in with your phone number
+  2. Fill in any app title and short name, platform "Desktop"
+  3. Copy "App api_id" and "App api_hash" below
+`)
 			id, err := p.ask(ctx, "API ID", "")
 			if err != nil {
 				return err
