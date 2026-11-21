@@ -533,7 +533,7 @@ func parseWhen(s string, now time.Time, endOfDay bool) (time.Time, error) {
 		}
 	}
 	if age, err := time.ParseDuration(s); err == nil && age >= 0 {
-		return now.Add(-age), nil
+		return now.Add(-age).Truncate(time.Second), nil
 	}
 	if day, err := time.ParseInLocation(time.DateOnly, s, time.Local); err == nil {
 		if endOfDay {
