@@ -54,8 +54,8 @@ OUTPUT
   them. Text that continues on further lines is indented by two spaces.
   Media shows as [photo], [file: name], ...
   Add --json to a command that prints data for one JSON object per line.
-  A JSON message also has "links": [{"text", "url"}] for the URLs the text
-  does not show, behind its words or its buttons.
+  A JSON message with URLs its text does not show, behind its words or its
+  buttons, lists them in "links": [{"text", "url"}].
   Exit codes: 0 done, 1 failed, 2 wrong usage, 3 refused: by the account's
   limits, or because the command is for a person. Errors go to stderr.
 

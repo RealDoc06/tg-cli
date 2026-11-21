@@ -63,7 +63,7 @@ func textLinks(text string, entities []tg.MessageEntityClass) []core.Link {
 			units = utf16.Encode([]rune(text))
 		}
 		start := min(max(link.Offset, 0), len(units))
-		end := min(start+max(link.Length, 0), len(units))
+		end := min(max(link.Offset+link.Length, start), len(units))
 		out = append(out, core.Link{Text: string(utf16.Decode(units[start:end])), URL: link.URL})
 	}
 	return out
@@ -79,6 +79,9 @@ func buttonOf(button tg.KeyboardInlineButton) core.Button {
 			out.Kind, out.Value = core.ButtonCallback, string(t.Data)
 		}
 	case *tg.InlineButtonTypeURL:
+		out.Kind, out.Value = core.ButtonURL, t.URL
+	case *tg.InlineButtonTypeURLAuth:
+		// A link that can log the account in to the site: opened as a plain link.
 		out.Kind, out.Value = core.ButtonURL, t.URL
 	case *tg.InlineButtonTypeCopy:
 		out.Kind, out.Value = core.ButtonCopy, t.CopyText

@@ -158,7 +158,7 @@ func New() *Backend {
 		msgs := b.messages[chat.ID]
 		last := &msgs[len(msgs)-1]
 		last.Buttons = keyboards[chat.ID]
-		last.Links = append(textLinks[chat.ID], core.ButtonLinks(last.Buttons)...)
+		last.Links = slices.Concat(textLinks[chat.ID], core.ButtonLinks(last.Buttons))
 		chat.Last = last
 		// They read everything up to their last answer, so a message of
 		// the account after it shows as not read yet.

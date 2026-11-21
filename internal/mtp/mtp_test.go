@@ -167,8 +167,13 @@ func TestTextLinks(t *testing.T) {
 		&tg.MessageEntityBold{Offset: 0, Length: 2},
 		&tg.MessageEntityTextURL{Offset: 10, Length: 8, URL: "https://amzn.example/x"},
 		&tg.MessageEntityTextURL{Offset: 15, Length: 50, URL: "https://past.example"},
+		&tg.MessageEntityTextURL{Offset: -1, Length: 3, URL: "https://before.example"},
 	})
-	want := []core.Link{{Text: "BUY HERE", URL: "https://amzn.example/x"}, {Text: "ERE", URL: "https://past.example"}}
+	want := []core.Link{
+		{Text: "BUY HERE", URL: "https://amzn.example/x"},
+		{Text: "ERE", URL: "https://past.example"},
+		{Text: "🔥", URL: "https://before.example"}, // the two units left of a range starting before the text
+	}
 	if !slices.Equal(links, want) {
 		t.Fatalf("textLinks = %+v, want %+v", links, want)
 	}
