@@ -59,6 +59,11 @@ var keyboards = map[int64][][]core.Button{
 	},
 }
 
+// textLinks are the links behind words of the last message of chats.
+var textLinks = map[int64][]core.Link{
+	-1001000000202: {{Text: "Issue 572", URL: "https://goweekly.example/issues/572"}},
+}
+
 var fixtures = []fixture{
 	{core.Chat{ID: 101, Kind: core.KindUser, Title: "Alice Rossi", Username: "alice", Unread: 2, Pinned: true, PhotoID: 1}, []string{
 		"190|Alice Rossi|hey, are we still on for tomorrow?",
@@ -151,8 +156,10 @@ func New() *Backend {
 		}
 		chat := f.chat
 		msgs := b.messages[chat.ID]
-		msgs[len(msgs)-1].Buttons = keyboards[chat.ID]
-		chat.Last = &msgs[len(msgs)-1]
+		last := &msgs[len(msgs)-1]
+		last.Buttons = keyboards[chat.ID]
+		last.Links = append(textLinks[chat.ID], core.ButtonLinks(last.Buttons)...)
+		chat.Last = last
 		// They read everything up to their last answer, so a message of
 		// the account after it shows as not read yet.
 		for _, m := range msgs {

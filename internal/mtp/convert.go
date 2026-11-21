@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"time"
+	"unicode/utf16"
 
 	"github.com/gotd/td/tg"
 
@@ -29,6 +30,7 @@ func (b *backend) message(raw tg.MessageClass, e tg.Entities) (core.Message, boo
 				out.Buttons = append(out.Buttons, buttons)
 			}
 		}
+		out.Links = append(textLinks(m.Message, m.Entities), core.ButtonLinks(out.Buttons)...)
 		if reply, ok := m.ReplyTo.(*tg.MessageReplyHeader); ok && !reply.ForumTopic {
 			out.ReplyTo = reply.ReplyToMsgID
 		}
@@ -45,6 +47,26 @@ func (b *backend) message(raw tg.MessageClass, e tg.Entities) (core.Message, boo
 		return out, true
 	}
 	return core.Message{}, false
+}
+
+// textLinks lists the links hidden behind words of a message's text. Telegram
+// places entities in UTF-16 code units, so the text is sliced in those.
+func textLinks(text string, entities []tg.MessageEntityClass) []core.Link {
+	var out []core.Link
+	var units []uint16
+	for _, entity := range entities {
+		link, ok := entity.(*tg.MessageEntityTextURL)
+		if !ok {
+			continue
+		}
+		if units == nil {
+			units = utf16.Encode([]rune(text))
+		}
+		start := min(max(link.Offset, 0), len(units))
+		end := min(start+max(link.Length, 0), len(units))
+		out = append(out, core.Link{Text: string(utf16.Decode(units[start:end])), URL: link.URL})
+	}
+	return out
 }
 
 // buttonOf converts a button of an inline keyboard. A callback button that
