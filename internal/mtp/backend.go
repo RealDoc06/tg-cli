@@ -456,15 +456,16 @@ func lastMessage(raw []tg.MessageClass) (tg.NotEmptyMessage, bool) {
 	return nil, false
 }
 
-// complete tells whether seen messages are all the results there are.
+// complete tells whether seen messages are all the results there are. A
+// count of 0 alongside messages means Telegram did not give one.
 func complete(res tg.MessagesMessagesClass, seen int) bool {
 	switch r := res.(type) {
 	case *tg.MessagesMessages:
 		return true
 	case *tg.MessagesMessagesSlice:
-		return !r.Inexact && seen >= r.Count
+		return !r.Inexact && r.Count > 0 && seen >= r.Count
 	case *tg.MessagesChannelMessages:
-		return !r.Inexact && seen >= r.Count
+		return !r.Inexact && r.Count > 0 && seen >= r.Count
 	}
 	return false
 }

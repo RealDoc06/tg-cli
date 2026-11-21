@@ -128,7 +128,7 @@ func TestParseWhen(t *testing.T) {
 		{"12h", false, now.Add(-12 * time.Hour)},
 		{"2026-11-01", false, time.Date(2026, 11, 1, 0, 0, 0, 0, time.Local)},
 		{"2026-11-01", true, time.Date(2026, 11, 1, 23, 59, 59, 0, time.Local)},
-		{"2026-11-01T15:04:05Z", true, time.Date(2026, 11, 1, 15, 4, 5, 0, time.UTC)},
+		{"2026-11-01T15:04:05.5Z", true, time.Date(2026, 11, 1, 15, 4, 5, 0, time.UTC)},
 	} {
 		got, err := parseWhen(c.in, now, c.endOfDay)
 		if err != nil || !got.Equal(c.want) {

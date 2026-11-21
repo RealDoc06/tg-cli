@@ -521,10 +521,12 @@ range, --kind a search everywhere to one kind of chat.`
 // parseWhen reads a --since or --until value: a day, an RFC 3339 time, or an
 // age before now in days (7d), hours or minutes (12h, 30m). With endOfDay, a
 // day means its end, so --until 2026-11-01 includes that day. Empty is zero.
+// Times are cut to the second, as message dates are.
 func parseWhen(s string, now time.Time, endOfDay bool) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil
 	}
+	now = now.Truncate(time.Second)
 	if days, ok := strings.CutSuffix(s, "d"); ok {
 		if n, err := strconv.Atoi(days); err == nil && n >= 0 {
 			return now.AddDate(0, 0, -n), nil
@@ -540,7 +542,7 @@ func parseWhen(s string, now time.Time, endOfDay bool) (time.Time, error) {
 		return day, nil
 	}
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, nil
+		return t.Truncate(time.Second), nil
 	}
 	return time.Time{}, fmt.Errorf("%q is not a date (2026-11-01), a time (2026-11-01T15:04:05Z) or an age (7d, 12h)", s)
 }
