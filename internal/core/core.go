@@ -61,8 +61,30 @@ type Message struct {
 	// PictureSize is the media's size in pixels, zero when unknown. The TUI
 	// sets room aside for the picture with it, so nothing moves when it loads.
 	PictureSize image.Point `json:"-"`
+	// Links are the URLs the text does not show: links behind words of the
+	// text, then the link buttons of the keyboard.
+	Links []Link `json:"links,omitempty"`
 	// Buttons are a bot's inline keyboard, row by row.
 	Buttons [][]Button `json:"-"`
+}
+
+// Link is a URL behind Text, which is what the message shows instead.
+type Link struct {
+	Text string `json:"text"`
+	URL  string `json:"url"`
+}
+
+// ButtonLinks lists the link buttons of a keyboard, for Message.Links.
+func ButtonLinks(rows [][]Button) []Link {
+	var out []Link
+	for _, row := range rows {
+		for _, b := range row {
+			if b.Kind == ButtonURL {
+				out = append(out, Link{Text: b.Text, URL: b.Value})
+			}
+		}
+	}
+	return out
 }
 
 // ButtonKind tells what pressing a button of a bot's keyboard does.
