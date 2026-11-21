@@ -19,6 +19,11 @@ ALSO
   tg read <chat> --after <id>         only what is newer than a message
   tg read <chat> --before <id>        page back through older history
   tg search <text> [-c <chat>]        search everywhere, or in one chat
+  tg search <text> --since 7d --until 2026-11-01 --kind channel
+                                      only in a time range (a date, an RFC
+                                      3339 time or an age like 7d, 12h), or
+                                      everywhere in chats of one kind: user,
+                                      group or channel
   tg send <chat> -f <path> "caption"  attach a file or image
   tg download <chat> <id> -o <dir>    save a message's photo or file. Never
                                       over an existing file, never into tg's

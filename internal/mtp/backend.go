@@ -353,30 +353,77 @@ func (b *backend) CreateGroup(ctx context.Context, title string) (core.Chat, err
 	return core.Chat{}, errors.New("Telegram did not return the new group")
 }
 
+// Search pages through Telegram's results until q.Limit matches. Global
+// search moves on with a (rate, peer, ID) cursor, search in one chat with the
+// last message ID. Paging stops when a page is empty, when Telegram says no
+// more are left, or when the cursor does not move on.
 func (b *backend) Search(ctx context.Context, q core.SearchQuery) ([]core.Message, error) {
 	limit := q.Limit
-	if limit <= 0 || limit > pageSize {
+	if limit <= 0 {
 		limit = pageSize
 	}
-	var res tg.MessagesMessagesClass
-	var err error
-	if q.ChatID == 0 {
-		res, err = b.api.MessagesSearchGlobal(ctx, &tg.MessagesSearchGlobalRequest{
-			Q: q.Text, Filter: &tg.InputMessagesFilterEmpty{}, OffsetPeer: &tg.InputPeerEmpty{}, Limit: limit,
-		})
-	} else {
-		var peer tg.InputPeerClass
+	var peer tg.InputPeerClass
+	if q.ChatID != 0 {
+		var err error
 		if peer, err = b.peers.input(q.ChatID); err != nil {
 			return nil, err
 		}
-		res, err = b.api.MessagesSearch(ctx, &tg.MessagesSearchRequest{
-			Peer: peer, Q: q.Text, Filter: &tg.InputMessagesFilterEmpty{}, Limit: limit,
-		})
 	}
-	if err != nil {
-		return nil, err
+	minDate, maxDate := unixDate(q.Since), unixDate(q.Until)
+	global := tg.MessagesSearchGlobalRequest{
+		Q: q.Text, Filter: &tg.InputMessagesFilterEmpty{}, MinDate: minDate, MaxDate: maxDate,
+		OffsetPeer:     &tg.InputPeerEmpty{},
+		BroadcastsOnly: q.Kind == core.KindChannel, GroupsOnly: q.Kind == core.KindGroup, UsersOnly: q.Kind == core.KindUser,
 	}
-	out := b.messages(res)
+	inChat := tg.MessagesSearchRequest{Peer: peer, Q: q.Text, Filter: &tg.InputMessagesFilterEmpty{}, MinDate: minDate, MaxDate: maxDate}
+	var out []core.Message
+	for len(out) < limit {
+		want := min(pageSize, limit-len(out))
+		var res tg.MessagesMessagesClass
+		var err error
+		if peer == nil {
+			global.Limit = want
+			res, err = b.api.MessagesSearchGlobal(ctx, &global)
+		} else {
+			inChat.Limit = want
+			res, err = b.api.MessagesSearch(ctx, &inChat)
+		}
+		if err != nil {
+			return nil, err
+		}
+		page, ok := res.AsModified()
+		if !ok || len(page.GetMessages()) == 0 {
+			break
+		}
+		out = append(out, b.messages(res)...)
+		raw := page.GetMessages()
+		last := raw[len(raw)-1]
+		if _, all := res.(*tg.MessagesMessages); all {
+			break
+		}
+		if peer != nil {
+			// Results come newest first, so the last ID only goes down.
+			if inChat.OffsetID != 0 && last.GetID() >= inChat.OffsetID {
+				break
+			}
+			inChat.OffsetID = last.GetID()
+			continue
+		}
+		slice, ok := res.(*tg.MessagesMessagesSlice)
+		if !ok {
+			break
+		}
+		rate, more := slice.GetNextRate()
+		msg, ok := last.AsNotEmpty()
+		if !more || !ok || (rate == global.OffsetRate && last.GetID() == global.OffsetID) {
+			break
+		}
+		lastPeer, err := b.peers.input(chatIDOf(msg.GetPeerID()))
+		if err != nil {
+			break
+		}
+		global.OffsetRate, global.OffsetPeer, global.OffsetID = rate, lastPeer, last.GetID()
+	}
 	for i := range out {
 		if chat, ok := b.peers.chat(out[i].ChatID); ok {
 			out[i].Chat = chat.Title
@@ -384,6 +431,14 @@ func (b *backend) Search(ctx context.Context, q core.SearchQuery) ([]core.Messag
 	}
 	slices.Reverse(out)
 	return out, nil
+}
+
+// unixDate converts a date bound of a request, 0 when there is none.
+func unixDate(t time.Time) int {
+	if t.IsZero() {
+		return 0
+	}
+	return int(t.Unix())
 }
 
 func (b *backend) Avatar(ctx context.Context, chat core.Chat) ([]byte, error) {

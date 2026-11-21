@@ -337,15 +337,23 @@ func (b *Backend) Search(_ context.Context, q core.SearchQuery) ([]core.Message,
 	defer b.mu.Unlock()
 	var out []core.Message
 	for _, c := range b.chats {
-		if q.ChatID != 0 && c.ID != q.ChatID {
+		kind := c.Kind
+		if kind == core.KindBot {
+			kind = core.KindUser // as on Telegram
+		}
+		if q.ChatID != 0 && c.ID != q.ChatID || q.Kind != "" && kind != q.Kind {
 			continue
 		}
 		for _, m := range b.messages[c.ID] {
-			if strings.Contains(strings.ToLower(m.Text), strings.ToLower(q.Text)) {
-				out = append(out, m)
+			if !strings.Contains(strings.ToLower(m.Text), strings.ToLower(q.Text)) ||
+				!q.Since.IsZero() && m.Date.Before(q.Since) || !q.Until.IsZero() && m.Date.After(q.Until) {
+				continue
 			}
+			m.Chat = c.Title
+			out = append(out, m)
 		}
 	}
+	slices.SortStableFunc(out, func(x, y core.Message) int { return x.Date.Compare(y.Date) })
 	if q.Limit > 0 && len(out) > q.Limit {
 		out = out[len(out)-q.Limit:]
 	}
