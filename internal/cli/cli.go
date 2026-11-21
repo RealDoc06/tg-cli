@@ -488,6 +488,9 @@ range, --kind a search everywhere to one kind of chat.`
 		if q.Until, err = parseWhen(*until, now, true); err != nil {
 			return errUsage{fmt.Errorf("--until: %w", err)}
 		}
+		if !q.Since.IsZero() && !q.Until.IsZero() && q.Since.After(q.Until) {
+			return errUsage{errors.New("--since is after --until, nothing can match: swap them")}
+		}
 		return a.backend(ctx, false, func(ctx context.Context, be core.Backend) error {
 			var chat *core.Chat
 			if *chatRef != "" {

@@ -102,6 +102,7 @@ func TestUsageErrors(t *testing.T) {
 		{"search", "x", "--kind", "bot"},
 		{"search", "x", "--kind", "channel", "-c", "alice"},
 		{"search", "x", "--since", "yesterday"},
+		{"search", "x", "--since", "2026-11-02", "--until", "2026-11-01"},
 	} {
 		if err := run(t, args...); !errors.As(err, new(errUsage)) {
 			t.Errorf("tg %s: got %v, want a usage error", strings.Join(args, " "), err)
